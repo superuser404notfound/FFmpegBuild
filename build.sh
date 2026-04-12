@@ -164,7 +164,7 @@ make_xcframeworks() {
 
         make_framework "$LIB" "$FW" "ios"          ios-arm64
         make_framework "$LIB" "$FW" "isimulator"   isimulator-arm64 isimulator-x86_64
-        make_framework "$LIB" "$FW" "tvos"         tvos-arm64 tvos-arm64e
+        make_framework "$LIB" "$FW" "tvos"         tvos-arm64
         make_framework "$LIB" "$FW" "tvsimulator"  tvsimulator-arm64 tvsimulator-x86_64
         make_framework "$LIB" "$FW" "macos"        macos-arm64 macos-x86_64
 
@@ -205,7 +205,6 @@ build_one ios-arm64          iphoneos         arm64  arm64-apple-ios16.0        
 build_one isimulator-arm64   iphonesimulator  arm64  arm64-apple-ios16.0-simulator          16.0
 build_one isimulator-x86_64  iphonesimulator  x86_64 x86_64-apple-ios16.0-simulator         16.0
 build_one tvos-arm64         appletvos        arm64  arm64-apple-tvos16.0                   16.0
-build_one tvos-arm64e        appletvos        arm64e arm64e-apple-tvos16.0                  16.0
 build_one tvsimulator-arm64  appletvsimulator arm64  arm64-apple-tvos16.0-simulator         16.0
 build_one tvsimulator-x86_64 appletvsimulator x86_64 x86_64-apple-tvos16.0-simulator        16.0
 build_one macos-arm64        macosx           arm64  arm64-apple-macos14.0                  14.0
