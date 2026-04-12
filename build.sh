@@ -121,6 +121,21 @@ make_framework() {
     # Headers from first arch
     cp -R "${BUILD_DIR}/thin/${KEYS[1]}/include/${LIB}/"* "${FW_DIR}/Headers/"
 
+    # Remove platform-specific hwcontext headers that require unavailable
+    # system headers (CUDA, Vulkan, DRM, VAAPI, VDPAU, MediaCodec, OpenCL).
+    # We only need hwcontext.h (base) and hwcontext_videotoolbox.h on Apple.
+    rm -f "${FW_DIR}/Headers/hwcontext_cuda.h" \
+          "${FW_DIR}/Headers/hwcontext_d3d11va.h" \
+          "${FW_DIR}/Headers/hwcontext_d3d12va.h" \
+          "${FW_DIR}/Headers/hwcontext_drm.h" \
+          "${FW_DIR}/Headers/hwcontext_dxva2.h" \
+          "${FW_DIR}/Headers/hwcontext_mediacodec.h" \
+          "${FW_DIR}/Headers/hwcontext_opencl.h" \
+          "${FW_DIR}/Headers/hwcontext_qsv.h" \
+          "${FW_DIR}/Headers/hwcontext_vaapi.h" \
+          "${FW_DIR}/Headers/hwcontext_vdpau.h" \
+          "${FW_DIR}/Headers/hwcontext_vulkan.h"
+
     # Lipo
     local INPUTS=()
     for K in "${KEYS[@]}"; do
@@ -132,10 +147,11 @@ make_framework() {
     cat > "${FW_DIR}/Modules/module.modulemap" << EOF
 framework module ${FW} [system] {
     umbrella "."
-    exclude header "vdpau.h"
-    exclude header "qsv.h"
-    exclude header "dxva2.h"
     exclude header "d3d11va.h"
+    exclude header "d3d12va.h"
+    exclude header "dxva2.h"
+    exclude header "qsv.h"
+    exclude header "vdpau.h"
     export *
 }
 EOF
