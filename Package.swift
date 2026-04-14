@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "Libavformat", targets: ["Libavformat"]),
         .library(name: "Libavutil", targets: ["Libavutil"]),
         .library(name: "Libswresample", targets: ["Libswresample"]),
+        .library(name: "Libswscale", targets: ["Libswscale"]),
         .library(name: "Libdav1d", targets: ["Libdav1d"]),
     ],
     targets: [
@@ -30,6 +31,7 @@ let package = Package(
                 "Libavformat",
                 "Libavutil",
                 "Libswresample",
+                "Libswscale",
                 "Libdav1d",
             ],
             path: "Sources/FFmpegBuild",
@@ -48,6 +50,7 @@ let package = Package(
         .binaryTarget(name: "Libavformat", path: "Sources/Libavformat.xcframework"),
         .binaryTarget(name: "Libavutil", path: "Sources/Libavutil.xcframework"),
         .binaryTarget(name: "Libswresample", path: "Sources/Libswresample.xcframework"),
+        .binaryTarget(name: "Libswscale", path: "Sources/Libswscale.xcframework"),
         .binaryTarget(name: "Libdav1d", path: "Sources/Libdav1d.xcframework"),
     ]
 )

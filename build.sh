@@ -109,7 +109,7 @@ COMMON_FLAGS=(
     --disable-autodetect --disable-doc --disable-programs
     --disable-devices --disable-outdevs --disable-indevs
     --disable-postproc --disable-avdevice --disable-avfilter
-    --disable-swscale --disable-encoders --disable-muxers
+    --enable-swscale --disable-encoders --disable-muxers
     --disable-bsfs --disable-network --disable-protocols
     --disable-d3d11va --disable-dxva2 --disable-vaapi --disable-vdpau
     --disable-gray --disable-iconv --disable-bzlib
@@ -271,7 +271,7 @@ make_xcframeworks() {
     echo ""
     echo "━━━ Creating XCFrameworks ━━━"
 
-    local PAIRS=("libavcodec:Libavcodec" "libavformat:Libavformat" "libavutil:Libavutil" "libswresample:Libswresample" "dav1d:Libdav1d")
+    local PAIRS=("libavcodec:Libavcodec" "libavformat:Libavformat" "libavutil:Libavutil" "libswresample:Libswresample" "libswscale:Libswscale" "dav1d:Libdav1d")
 
     for PAIR in "${PAIRS[@]}"; do
         local LIB="${PAIR%%:*}"
