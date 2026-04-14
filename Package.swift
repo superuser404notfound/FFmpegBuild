@@ -19,9 +19,10 @@ let package = Package(
         .library(name: "Libavformat", targets: ["Libavformat"]),
         .library(name: "Libavutil", targets: ["Libavutil"]),
         .library(name: "Libswresample", targets: ["Libswresample"]),
+        .library(name: "Libdav1d", targets: ["Libdav1d"]),
     ],
     targets: [
-        // Umbrella target that links all FFmpeg libraries + system frameworks
+        // Umbrella target that links all FFmpeg libraries + dav1d + system frameworks
         .target(
             name: "FFmpegBuild",
             dependencies: [
@@ -29,6 +30,7 @@ let package = Package(
                 "Libavformat",
                 "Libavutil",
                 "Libswresample",
+                "Libdav1d",
             ],
             path: "Sources/FFmpegBuild",
             linkerSettings: [
@@ -46,5 +48,6 @@ let package = Package(
         .binaryTarget(name: "Libavformat", path: "Sources/Libavformat.xcframework"),
         .binaryTarget(name: "Libavutil", path: "Sources/Libavutil.xcframework"),
         .binaryTarget(name: "Libswresample", path: "Sources/Libswresample.xcframework"),
+        .binaryTarget(name: "Libdav1d", path: "Sources/Libdav1d.xcframework"),
     ]
 )
