@@ -1,81 +1,99 @@
-# FFmpegBuild
+<h1 align="center">FFmpegBuild</h1>
 
-Minimal FFmpeg build for Apple platforms — only demuxing + decoding, zero network dependencies.
+<p align="center">
+  <b>Slim FFmpeg xcframeworks for Apple platforms.</b><br>
+  Demuxing and decoding only. No network stack, no encoders, no CLI binaries.
+</p>
 
-[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-iOS%2016%2B%20%7C%20tvOS%2016%2B%20%7C%20macOS%2014%2B-lightgrey)]()
+<p align="center">
+  <img src="https://img.shields.io/badge/FFmpeg-7.1-brightgreen">
+  <img src="https://img.shields.io/badge/dav1d-1.5.1-blue">
+  <img src="https://img.shields.io/badge/iOS-16%2B-black?logo=apple">
+  <img src="https://img.shields.io/badge/tvOS-16%2B-black?logo=apple">
+  <img src="https://img.shields.io/badge/macOS-14%2B-black?logo=apple">
+  <img src="https://img.shields.io/badge/license-LGPL--3.0-lightgrey">
+</p>
 
-## What's Included
+---
 
-| Library | Purpose | Size (per arch) |
-|---|---|---|
-| libavformat | Container demuxing (MKV, MP4, HLS, TS, AVI, FLV, OGG, ...) | ~2 MB |
-| libavcodec | Video + audio decoding with VideoToolbox HW acceleration | ~6-8 MB |
-| libavutil | Shared utilities | ~2 MB |
-| libswresample | Audio resampling + format conversion | ~0.3 MB |
+## Why
 
-## What's NOT Included
+Full FFmpeg builds for iOS land at 40-70 MB because they bundle a TLS stack, encoders, filters, and a dozen protocols your app will never use. For a player, most of that is dead weight — Apple already ships HTTP/3, `URLSession`, `Network.framework`, VideoToolbox and AVFoundation. So this build strips out everything you don't need and keeps what you do.
 
-- ❌ Network/TLS (no gnutls, no OpenSSL, no SecureTransport)
-- ❌ Encoders (no video/audio encoding)
-- ❌ Muxers (no container writing)
-- ❌ Filters (no libavfilter)
-- ❌ Scaling (no libswscale)
-- ❌ Devices (no libavdevice)
-- ❌ Programs (no ffmpeg/ffplay/ffprobe binaries)
+**~10 MB per architecture, zero network dependencies, one build script.**
 
-## Why No Network?
+## In
 
-Network I/O is handled by Apple's native `URLSession` / `Network.framework`, which provides:
-- TLS 1.3 + HTTP/2 + HTTP/3 (future-proof, never deprecated)
-- System proxy + VPN support
-- App Transport Security compliance
-- Zero external dependencies
+| Library        | What it does                                          |
+| -------------- | ----------------------------------------------------- |
+| libavformat    | Demux MKV, MP4, HLS, DASH, MPEG-TS, AVI, WebM, OGG, … |
+| libavcodec     | Decode video + audio (with VideoToolbox bridge)       |
+| libavutil      | Shared primitives                                     |
+| libswresample  | Audio resampling / channel remap / format convert    |
+| **dav1d**      | Fast AV1 software decoder (separate xcframework)      |
 
-FFmpeg receives data through a custom `avio_alloc_context` read callback — it never touches the network directly.
+## Out
 
-## Building
+Anything the app layer should already handle or doesn't need:
 
-```bash
-# Build for all platforms
-./build.sh
+- Network / TLS — FFmpeg reads from an `avio_alloc_context` callback, you wire `URLSession` to it
+- Encoders and muxers
+- libavfilter, libswscale, libavdevice
+- Programs (`ffmpeg`, `ffplay`, `ffprobe`)
+- Hardware accel layers other than VideoToolbox
+- Text subtitle rendering (do that in SwiftUI)
 
-# Build only tvOS
-./build.sh tvos
+## Build
 
-# Clean
-./build.sh clean
+```sh
+./build.sh          # all platforms
+./build.sh tvos     # single platform
+./build.sh clean    # wipe everything
 ```
 
-Requires: Xcode 26+, ~10-30 minutes build time.
+Needs Xcode 16+ and roughly 10-30 minutes depending on your machine. Both FFmpeg and dav1d sources clone on first run.
 
-## Integration
+Output lands in `Sources/` as xcframeworks, ready to consume via Swift Package Manager.
 
-### As SPM Dependency
+## Use
 
 ```swift
+// Package.swift
 dependencies: [
-    .package(path: "../FFmpegBuild")
+    .package(url: "https://github.com/superuser404notfound/FFmpegBuild", branch: "main")
 ]
 
-// In your target:
+// Target:
 .product(name: "FFmpegBuild", package: "FFmpegBuild")
 ```
 
-## Supported Codecs
+Then import the modules you need: `Libavformat`, `Libavcodec`, `Libavutil`, `Libswresample`, `Libdav1d`.
 
-### Video Decoders
-H.264, HEVC (+ VideoToolbox HW), VP8, VP9, AV1, MPEG-2, MPEG-4, VC-1
+## Decoder support
 
-### Audio Decoders
-AAC, AC3, EAC3, FLAC, MP3, Opus, Vorbis, TrueHD, DTS, ALAC, PCM
+- **Video (hardware via VideoToolbox)** — H.264, HEVC up to Main10 (HDR10/DV Profile 8)
+- **Video (software)** — AV1 (dav1d), VP9, VP8, MPEG-2, MPEG-4, VC-1
+- **Audio** — AAC, AC3, EAC3 (incl. JOC detection for Atmos), FLAC, MP3, Opus, Vorbis, TrueHD, DTS, ALAC, PCM
+- **Subtitles** — SRT, ASS, SSA, WebVTT, PGS, DVB, DVD
 
-### Subtitle Decoders
-SRT, ASS/SSA, WebVTT, PGS, DVB, DVD
+HDR metadata (BT.2020, SMPTE ST 2084 / PQ, HLG, DV RPU) is preserved end-to-end so the decode pipeline can tag frames correctly.
 
-### Container Demuxers
-MKV/WebM, MP4/M4A, HLS, DASH, MPEG-TS, AVI, FLV, OGG, WAV, MP3
+## Size
+
+Per architecture, release configuration:
+
+| Target                | FFmpeg    | dav1d    | Total   |
+| --------------------- | --------- | -------- | ------- |
+| iOS / tvOS arm64      | ~10.5 MB  | ~1.2 MB  | ~12 MB  |
+| macOS arm64           | ~10.5 MB  | ~1.2 MB  | ~12 MB  |
+| macOS x86_64          | ~11 MB    | ~1.3 MB  | ~12 MB  |
+
+Assembly-optimized paths are enabled where the Apple toolchain permits.
 
 ## License
 
-LGPL 3.0 — same as FFmpeg itself. App Store compatible when dynamically linked.
+[LGPL-3.0](LICENSE) — same as upstream FFmpeg. App Store compatible when linked dynamically.
+
+---
+
+<p align="center"><sub>Used by <a href="https://github.com/superuser404notfound/AetherEngine">AetherEngine</a>.</sub></p>
