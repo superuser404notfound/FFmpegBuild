@@ -90,6 +90,10 @@ Per architecture, release configuration:
 
 Assembly-optimized paths are enabled where the Apple toolchain permits.
 
+## Built with
+
+This package is vibe-coded — assembled and maintained by [Vincent Herbst](https://github.com/superuser404notfound) in close pair-programming with **Claude** (Anthropic). The commit log is the receipt: nearly every commit carries a `Co-Authored-By: Claude` trailer.
+
 ## License
 
 [LGPL-3.0](LICENSE) — same as upstream FFmpeg. App Store compatible when linked dynamically.
