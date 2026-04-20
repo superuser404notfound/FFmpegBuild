@@ -255,13 +255,16 @@ framework module ${FW} [system] {
 EOF
     # Info.plist — App Store submission rejects bundles missing
     # CFBundleShortVersionString or MinimumOSVersion (ITMS-90057,
-    # ITMS-90360). Pick the floor based on the platform slug.
+    # ITMS-90360), and ALSO rejects when an embedded framework's
+    # MinimumOSVersion is *lower* than the host app's deployment
+    # target (ITMS-90208). We pick floors that match the apps that
+    # actually consume this build (JellySeeTV is tvOS 26+).
     local MIN_OS
     case "${PLATFORM}" in
-        ios|ios-sim)   MIN_OS="16.0" ;;
-        tvos|tvos-sim) MIN_OS="16.0" ;;
+        ios|ios-sim)   MIN_OS="26.0" ;;
+        tvos|tvos-sim) MIN_OS="26.0" ;;
         macos)         MIN_OS="14.0" ;;
-        *)             MIN_OS="16.0" ;;
+        *)             MIN_OS="26.0" ;;
     esac
 
     cat > "${FW_DIR}/Info.plist" << EOF
