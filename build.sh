@@ -253,16 +253,28 @@ framework module ${FW} [system] {
     export *
 }
 EOF
-    # Info.plist
+    # Info.plist — App Store submission rejects bundles missing
+    # CFBundleShortVersionString or MinimumOSVersion (ITMS-90057,
+    # ITMS-90360). Pick the floor based on the platform slug.
+    local MIN_OS
+    case "${PLATFORM}" in
+        ios|ios-sim)   MIN_OS="16.0" ;;
+        tvos|tvos-sim) MIN_OS="16.0" ;;
+        macos)         MIN_OS="14.0" ;;
+        *)             MIN_OS="16.0" ;;
+    esac
+
     cat > "${FW_DIR}/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>${FW}</string>
-<key>CFBundleIdentifier</key><string>com.steelplayer.${FW}</string>
+<key>CFBundleIdentifier</key><string>com.aetherengine.${FW}</string>
 <key>CFBundleName</key><string>${FW}</string>
 <key>CFBundleVersion</key><string>1.0</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
 <key>CFBundlePackageType</key><string>FMWK</string>
+<key>MinimumOSVersion</key><string>${MIN_OS}</string>
 </dict></plist>
 EOF
 }
