@@ -1,6 +1,6 @@
 #!/bin/zsh
 #
-# FFmpegBuild — Minimal FFmpeg cross-compilation for Apple platforms.
+# FFmpegBuild: Minimal FFmpeg cross-compilation for Apple platforms.
 # Includes dav1d (fast AV1 software decoder).
 #
 # Usage:
@@ -253,7 +253,7 @@ framework module ${FW} [system] {
     export *
 }
 EOF
-    # Info.plist — App Store submission rejects bundles missing
+    # Info.plist: App Store submission rejects bundles missing
     # CFBundleShortVersionString or MinimumOSVersion (ITMS-90057,
     # ITMS-90360), and ALSO rejects when an embedded framework's
     # MinimumOSVersion is *lower* than the host app's deployment
@@ -323,7 +323,7 @@ if [[ "$1" == "clean" ]]; then
 fi
 
 echo "╔══════════════════════════════════════╗"
-echo "║  FFmpegBuild — FFmpeg + dav1d (AV1) ║"
+echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
 echo "╚══════════════════════════════════════╝"
 

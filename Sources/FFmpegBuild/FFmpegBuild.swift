@@ -1,4 +1,4 @@
-// FFmpegBuild — Minimal FFmpeg for Apple platforms.
+// FFmpegBuild: Minimal FFmpeg for Apple platforms.
 //
 // This is a thin wrapper target that links the prebuilt xcframeworks
 // (Libavcodec, Libavformat, Libavutil, Libswresample) together with

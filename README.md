@@ -18,7 +18,7 @@
 
 ## Why
 
-Full FFmpeg builds for iOS land at 40-70 MB because they bundle a TLS stack, encoders, filters, and a dozen protocols your app will never use. For a player, most of that is dead weight — Apple already ships HTTP/3, `URLSession`, `Network.framework`, VideoToolbox and AVFoundation. So this build strips out everything you don't need and keeps what you do.
+Full FFmpeg builds for iOS land at 40-70 MB because they bundle a TLS stack, encoders, filters, and a dozen protocols your app will never use. For a player, most of that is dead weight. Apple already ships HTTP/3, `URLSession`, `Network.framework`, VideoToolbox and AVFoundation. So this build strips out everything you don't need and keeps what you do.
 
 **~10 MB per architecture, zero network dependencies, one build script.**
 
@@ -36,7 +36,7 @@ Full FFmpeg builds for iOS land at 40-70 MB because they bundle a TLS stack, enc
 
 Anything the app layer should already handle or doesn't need:
 
-- Network / TLS — FFmpeg reads from an `avio_alloc_context` callback, you wire `URLSession` to it
+- Network / TLS: FFmpeg reads from an `avio_alloc_context` callback, you wire `URLSession` to it
 - Encoders and muxers
 - libavfilter, libswscale, libavdevice
 - Programs (`ffmpeg`, `ffplay`, `ffprobe`)
@@ -71,10 +71,10 @@ Then import the modules you need: `Libavformat`, `Libavcodec`, `Libavutil`, `Lib
 
 ## Decoder support
 
-- **Video (hardware via VideoToolbox)** — H.264, HEVC up to Main10 (HDR10/DV Profile 8)
-- **Video (software)** — AV1 (dav1d), VP9, VP8, MPEG-2, MPEG-4, VC-1
-- **Audio** — AAC, AC3, EAC3 (incl. JOC detection for Atmos), FLAC, MP3, Opus, Vorbis, TrueHD, DTS, ALAC, PCM
-- **Subtitles** — SRT, ASS, SSA, WebVTT, PGS, DVB, DVD
+- **Video (hardware via VideoToolbox)**: H.264, HEVC up to Main10 (HDR10/DV Profile 8)
+- **Video (software)**: AV1 (dav1d), VP9, VP8, MPEG-2, MPEG-4, VC-1
+- **Audio**: AAC, AC3, EAC3 (incl. JOC detection for Atmos), FLAC, MP3, Opus, Vorbis, TrueHD, DTS, ALAC, PCM
+- **Subtitles**: SRT, ASS, SSA, WebVTT, PGS, DVB, DVD
 
 HDR metadata (BT.2020, SMPTE ST 2084 / PQ, HLG, DV RPU) is preserved end-to-end so the decode pipeline can tag frames correctly.
 
@@ -92,11 +92,11 @@ Assembly-optimized paths are enabled where the Apple toolchain permits.
 
 ## Built with
 
-This package is vibe-coded — assembled and maintained by [Vincent Herbst](https://github.com/superuser404notfound) in close pair-programming with **Claude** (Anthropic). The commit log is the receipt: nearly every commit carries a `Co-Authored-By: Claude` trailer.
+This package is vibe-coded, assembled and maintained by [Vincent Herbst](https://github.com/superuser404notfound) in close pair-programming with **Claude** (Anthropic). The commit log is the receipt: nearly every commit carries a `Co-Authored-By: Claude` trailer.
 
 ## License
 
-[LGPL-3.0](LICENSE) — same as upstream FFmpeg. App Store compatible when linked dynamically.
+[LGPL-3.0](LICENSE), same as upstream FFmpeg. App Store compatible when linked dynamically.
 
 ---
 
