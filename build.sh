@@ -274,6 +274,37 @@ s#        if \(track->time_scale < 0\.01\) \{\n            av_log\(matroska->ctx
     fi
 }
 
+patch_ffmpeg_dav1_tag() {
+    # AetherEngine #547. MP4RA registers 'dav1' as the AV1 sample entry that signals
+    # Dolby Vision, and Apple's HLS authoring spec requires it for Dolby Vision
+    # Profile 10.0, the AV1 analogue of HEVC Profile 5: an IPT-PQ-c2 signal with no
+    # compatible base layer, so 'av01' is not an alternative there. FFmpeg knows the
+    # tag in neither direction (checked against master, 2026-09-18). Two tables, and
+    # both are needed: isom_tags.c maps the sample entry back to a codec id, so
+    # without it a 'dav1' MP4 probes as "unknown codec"; movenc.c's codec_mp4_tags is
+    # what validate_codec_tag() checks a requested tag against, so without it
+    # avformat_write_header fails with EINVAL and our remux never starts. 'dvh1' sits
+    # in that second table for the HEVC side already, which is why Profile 5 works.
+    # The cross-compatible profiles (10.1 / 10.4) ride an 'av01' sample entry with
+    # SUPPLEMENTAL-CODECS and are unaffected.
+    local T="${FFMPEG_SRC}/libavformat/isom_tags.c"
+    local M="${FFMPEG_SRC}/libavformat/movenc.c"
+    if grep -q "'d', 'a', 'v', '1'" "${T}" && grep -q "'d', 'a', 'v', '1'" "${M}"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: accept the dav1 sample entry for AV1 Dolby Vision (AetherEngine #547)"
+    perl -0777 -pi -e '
+s#(\{ AV_CODEC_ID_AV1,  MKTAG\('"'"'a'"'"', '"'"'v'"'"', '"'"'0'"'"', '"'"'1'"'"'\) \}, /\* AV1 \*/\n)#$1    { AV_CODEC_ID_AV1,  MKTAG('"'"'d'"'"', '"'"'a'"'"', '"'"'v'"'"', '"'"'1'"'"') }, /* AV1-related Dolby Vision */\n#;
+' "${T}"
+    perl -0777 -pi -e '
+s#(\{ AV_CODEC_ID_AV1,             MKTAG\('"'"'a'"'"', '"'"'v'"'"', '"'"'0'"'"', '"'"'1'"'"'\) \},\n)#$1    { AV_CODEC_ID_AV1,             MKTAG('"'"'d'"'"', '"'"'a'"'"', '"'"'v'"'"', '"'"'1'"'"') },\n#;
+' "${M}"
+    if ! grep -q "'d', 'a', 'v', '1'" "${T}" || ! grep -q "'d', 'a', 'v', '1'" "${M}"; then
+        echo "ERROR: dav1 codec tag patch did not apply (upstream source changed?)"
+        exit 1
+    fi
+}
+
 fetch_dav1d() {
     discard_stale_source "${DAV1D_SRC}" "${DAV1D_VERSION}"
     if [[ -d "${DAV1D_SRC}" ]]; then
@@ -1156,6 +1187,7 @@ patch_ffmpeg_pgssub
 patch_ffmpeg_visionos
 patch_ffmpeg_matroska_tts
 patch_ffmpeg_vc1_parser
+patch_ffmpeg_dav1_tag
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
