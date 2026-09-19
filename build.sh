@@ -287,6 +287,9 @@ patch_ffmpeg_dav1_tag() {
     # in that second table for the HEVC side already, which is why Profile 5 works.
     # The cross-compatible profiles (10.1 / 10.4) ride an 'av01' sample entry with
     # SUPPLEMENTAL-CODECS and are unaffected.
+    # Upstream as 4c6d67fe0f (PR 24556, merged 2026-09-18), master only, no release/8.1
+    # backport. The early return below makes this a no-op once FFMPEG_VERSION carries
+    # it, so drop this function on the FFmpeg 9.x bump.
     local T="${FFMPEG_SRC}/libavformat/isom_tags.c"
     local M="${FFMPEG_SRC}/libavformat/movenc.c"
     if grep -q "'d', 'a', 'v', '1'" "${T}" && grep -q "'d', 'a', 'v', '1'" "${M}"; then
