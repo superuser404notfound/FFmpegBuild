@@ -11,7 +11,7 @@
 #
 set -eo pipefail  # pipefail so `... | tail -N` doesn't swallow configure/make errors
 
-FFMPEG_VERSION="n8.1.2"
+FFMPEG_VERSION="n8.1.3"
 FFMPEG_REPO="https://github.com/FFmpeg/FFmpeg.git"
 DAV1D_VERSION="1.5.4"
 DAV1D_REPO="https://code.videolan.org/videolan/dav1d.git"
