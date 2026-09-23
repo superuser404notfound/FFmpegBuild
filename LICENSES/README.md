@@ -22,4 +22,9 @@ Notes:
   GPL code is compiled into the shipped binaries. This is a modification of
   libzvbi in the sense of LGPL section 2; the modification is published in
   `build.sh` (`patch_zvbi`).
-- No other patches are applied to any upstream source.
+- The FFmpeg sources also carry a small set of local patches, which modify
+  FFmpeg in the same LGPL section 2 sense. Each one is listed and explained
+  in the top-level [README](../README.md#local-ffmpeg-patches) and applied by
+  the `patch_ffmpeg*` functions in [build.sh](../build.sh), where its code is
+  published.
+- dav1d and zimg are built from unmodified upstream sources.
