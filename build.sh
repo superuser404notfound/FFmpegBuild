@@ -651,6 +651,15 @@ COMMON_FLAGS=(
     # playback shows audio only. The h264/hevc raw demuxers above already
     # cover H.264/HEVC-in-PS; these add MPEG-2 (DVD) and MPEG-4 Part 2.
     --enable-demuxer=mpegvideo --enable-demuxer=m4v
+    # Raw DTS, TrueHD and LATM demuxers, for the same reason on the audio side. An
+    # MPEG-TS PID whose stream_type does not name its codec (0x06 without a descriptor,
+    # an unknown type, or 0x04/0x0f, which mpegts re-checks) is resolved by
+    # set_codec_from_probe_data() running these raw demuxers' probes over the payload.
+    # Every codec in that table whose demuxer is missing here can never be confirmed,
+    # and the lenient mp3 probe (score 1 on noise) names the track instead: a DTS-HD
+    # IPTV channel opened as mp3 and every packet failed with "Header missing"
+    # (AetherEngine #641). The decoders (dca, truehd, aac_latm) were always in.
+    --enable-demuxer=dts --enable-demuxer=truehd --enable-demuxer=loas
     --disable-decoders
     --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=vp8
     --enable-decoder=vp9 --enable-decoder=av1 --enable-decoder=libdav1d
@@ -1178,6 +1187,31 @@ if [[ "${MODE}" == "package" ]]; then
     exit 0
 fi
 
+patch_ffmpeg_mpegts_mpeg1_probe() {
+    # AetherEngine #641. mpegts_set_stream_info() takes most PMT stream types at their
+    # word, but asks for a content probe on two of them (request_probe = 50): 0x04
+    # (MPEG-2 audio) and 0x0f (AAC), because muxers are known to mislabel those. 0x03
+    # (MPEG-1 audio) is not on the list, so a PID that a restreamer labels 0x03 while
+    # it carries something else is opened as mp3 with no probe at all. The reporter's
+    # IPTV channel carries DTS-HD that way: every packet fails in mp3float ("Header
+    # missing") and the audio track never produces a frame. The same bytes labelled
+    # 0x04, 0x06, 0x0f or an unknown type all probe as DTS. Putting 0x03 on the list
+    # costs a genuine MPEG audio PID nothing: mp3 and mp2 both settle on the first
+    # PES packet, and a probe that finds nothing better keeps the PMT's codec.
+    local F="${FFMPEG_SRC}/libavformat/mpegts.c"
+    if grep -q "pes->stream_type == STREAM_TYPE_AUDIO_MPEG1 ||" "${F}"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: probe the content of a PID labelled MPEG-1 audio (AetherEngine #641)"
+    perl -0777 -pi -e '
+s!    if \(pes->stream_type == STREAM_TYPE_AUDIO_MPEG2 \|\| pes->stream_type == STREAM_TYPE_AUDIO_AAC\)\n!    if (pes->stream_type == STREAM_TYPE_AUDIO_MPEG1 ||\n        pes->stream_type == STREAM_TYPE_AUDIO_MPEG2 ||\n        pes->stream_type == STREAM_TYPE_AUDIO_AAC)\n!;
+' "${F}"
+    if ! grep -q "pes->stream_type == STREAM_TYPE_AUDIO_MPEG1 ||" "${F}"; then
+        echo "ERROR: mpegts MPEG-1 audio probe patch did not apply (upstream source changed?)"
+        exit 1
+    fi
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1191,6 +1225,7 @@ patch_ffmpeg_visionos
 patch_ffmpeg_matroska_tts
 patch_ffmpeg_vc1_parser
 patch_ffmpeg_dav1_tag
+patch_ffmpeg_mpegts_mpeg1_probe
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
