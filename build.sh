@@ -1198,6 +1198,7 @@ patch_ffmpeg_mpegts_mpeg1_probe() {
     # 0x04, 0x06, 0x0f or an unknown type all probe as DTS. Putting 0x03 on the list
     # costs a genuine MPEG audio PID nothing: mp3 and mp2 both settle on the first
     # PES packet, and a probe that finds nothing better keeps the PMT's codec.
+    # Proposed upstream as FFmpeg PR 24697.
     local F="${FFMPEG_SRC}/libavformat/mpegts.c"
     if grep -q "pes->stream_type == STREAM_TYPE_AUDIO_MPEG1 ||" "${F}"; then
         return
