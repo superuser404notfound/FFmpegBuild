@@ -78,7 +78,7 @@ struct MatroskaSkipAttachmentsTests {
         #expect(opened.packets == 2)
     }
 
-    private static let frontLayout = """
+    static let frontLayout = """
         GkXfo6NChoEBQveBAULygQRC84EIQoKIbWF0cm9za2FCh4EEQoWBAhhTgGcBAAAAAAAZTBFNm3TLTbuMU6uEFUmpZlOsghAD
         TbuMU6uEFlSua1OsghB5TbuMU6uEHFO7a1OsghigTbuMU6uEElTDZ1OsghjLTbuMU6uEGUGkaVOsghf17E+wAAAAAAAAAAAA
         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA

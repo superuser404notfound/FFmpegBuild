@@ -1568,6 +1568,22 @@ patch_ffmpeg_matroska_skip_attachments() {
     }
 }
 
+patch_ffmpeg_matroska_byte_seek_done() {
+    # AetherEngine #944. matroskadec latches end of stream in its private "done" flag and only
+    # its own read_seek clears it, so after a byte seek (or the generic fallback a failed index
+    # seek takes) every read returned EOF once the file had been read to its end or a read had
+    # failed. The patch makes read_packet honour io_repositioned, like oggdec and av1dec.
+    local P="${SCRIPT_DIR}/patches/matroska-byte-seek-done.patch"
+    if grep -q "end of stream reached before it" "${FFMPEG_SRC}/libavformat/matroskadec.c"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: matroska forgets end of stream after a byte seek (AetherEngine #944)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: matroska byte seek patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1587,6 +1603,7 @@ patch_ffmpeg_movenc_fragment_end
 patch_ffmpeg_dca_x_heights
 patch_ffmpeg_av1_delayed_rap
 patch_ffmpeg_matroska_skip_attachments
+patch_ffmpeg_matroska_byte_seek_done
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
