@@ -3,8 +3,9 @@ matroskadec: option to skip the attached files while opening
 A Matroska file can carry attached files, in practice the fonts its ASS
 subtitles are styled with. Anime releases attach tens of megabytes of
 them, and the demuxer reads every byte while it opens the file, whether
-the Attachments element sits before the first Cluster (mkvmerge) or is
-reached through the SeekHead (lavf). Over a network origin the open
+the Attachments element sits before the first Cluster (where mkvmerge
+and lavf write it) or behind the Clusters, reached through the SeekHead
+(where mkvpropedit appends it). Over a network origin the open
 waits on that whole transfer before the first packet (AetherEngine
 issue 956: about 23 MB, about 11 s on a WAN address).
 
@@ -14,10 +15,10 @@ entry pointing at it is not followed. The file opens without attachment
 streams, and Tags that target an attachment are dropped without the
 "non-existent attachment" warning, since their target was skipped on
 purpose. Track streams are created before attachment streams, so stream
-indices and the packet stream are unchanged; measured on two 26 MB
-files with 24 MB of fonts (one per layout): 25.1 MB read to open
-without the option, 0.13 to 0.16 MB with it, identical packets and
-seeks either way.
+indices and the packet stream are unchanged; measured on 26 MB files
+with 24 MB of fonts in both layouts: about 25.2 MB read to open without
+the option, 0.13 to 0.16 MB with it, identical packets and seeks either
+way.
 
 --- a/libavformat/matroskadec.c
 +++ b/libavformat/matroskadec.c
