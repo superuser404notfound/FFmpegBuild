@@ -1551,6 +1551,23 @@ patch_ffmpeg_av1_delayed_rap() {
     }
 }
 
+patch_ffmpeg_matroska_skip_attachments() {
+    # AetherEngine #956. Matroska attachments (in practice the fonts of ASS subtitles, tens of
+    # megabytes on anime releases) are read in full while the file opens, before the first
+    # packet. The patch adds a matroska demuxer option "skip_attachments" (off by default)
+    # that passes over the Attachments element and the SeekHead entry pointing at it, for a
+    # host that does not use the fonts. Without the option the demuxer is unchanged.
+    local P="${SCRIPT_DIR}/patches/matroska-skip-attachments.patch"
+    if grep -q '"skip_attachments"' "${FFMPEG_SRC}/libavformat/matroskadec.c"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: matroska skip_attachments option (AetherEngine #956)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: matroska skip_attachments patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1569,6 +1586,7 @@ patch_ffmpeg_eac3_dec3
 patch_ffmpeg_movenc_fragment_end
 patch_ffmpeg_dca_x_heights
 patch_ffmpeg_av1_delayed_rap
+patch_ffmpeg_matroska_skip_attachments
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
