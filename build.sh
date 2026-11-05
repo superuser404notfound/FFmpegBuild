@@ -1512,10 +1512,10 @@ patch_ffmpeg_dca_x_heights() {
     # DTS:X heights without LibDTSX (AetherEngine #798). The standard presentation of DTS:X
     # carries its four height channels in a regular XLL channel set at the end of every XLL
     # frame, which upstream recognises (it sets the "DTS-HD MA + DTS:X" profile) but skips.
-    # The patch decodes that set with the existing channel set code, adds a decoder option
-    # "x_heights" (off by default) that outputs 7.1.4, and removes the -3 dB fold of each
-    # height from the bed speaker under it. Without the option the output is unchanged
-    # byte for byte. It lives in patches/ rather than inline: at this size a perl
+    # The patch decodes that set with the existing channel set code and adds a decoder option
+    # "x_heights" (off by default) that outputs 7.1.4: the bed as coded, with the heights
+    # still folded into it at -3 dB, next to the four heights. Nothing is taken out of the
+    # bed. Without the option the output is unchanged byte for byte. It lives in patches/ rather than inline: at this size a perl
     # substitution would be unreadable. The patch header explains the format.
     local P="${SCRIPT_DIR}/patches/dca-xll-x-heights.patch"
     if grep -q '"x_heights"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
