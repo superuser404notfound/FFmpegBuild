@@ -1515,13 +1515,20 @@ patch_ffmpeg_dca_x_heights() {
     # The patch decodes that set with the existing channel set code and adds a decoder option
     # "x_heights" (off by default) that outputs 7.1.4: the bed as coded, with the heights
     # still folded into it at -3 dB, next to the four heights. Nothing is taken out of the
-    # bed. Without the option the output is unchanged byte for byte. It lives in patches/ rather than inline: at this size a perl
+    # bed. Without the option the output is unchanged byte for byte. The same option decodes
+    # the four fixed heights of the alternate presentations (FFmpeg's "DTS:X IMAX" among
+    # them) and leaves their object channels in the bed. It lives in patches/ rather than inline: at this size a perl
     # substitution would be unreadable. The patch header explains the format.
     local P="${SCRIPT_DIR}/patches/dca-xll-x-heights.patch"
-    if grep -q '"x_heights"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
+    local -a files=(libavcodec/dca_xll.c libavcodec/dca_xll.h libavcodec/dcadec.c libavcodec/dcadec.h)
+    if grep -q '"x_presentation"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
         return
     fi
-    echo "→ Patching FFmpeg: decode the DTS:X standard presentation's height channels (AetherEngine #798)"
+    # A source tree patched by an earlier version of this patch: start over
+    if grep -q '"x_heights"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
+        git -C "${FFMPEG_SRC}" checkout -- "${files[@]}"
+    fi
+    echo "→ Patching FFmpeg: decode the DTS:X height channels, standard and alternate presentations (AetherEngine #798)"
     git -C "${FFMPEG_SRC}" apply "${P}" || {
         echo "ERROR: DTS:X height patch did not apply (upstream source changed?)"
         exit 1
