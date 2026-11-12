@@ -776,12 +776,14 @@ COMMON_FLAGS=(
     --enable-decoder=pcm_s16le --enable-decoder=pcm_s24le --enable-decoder=pcm_f32le
     # The other integer and float PCM shapes the enabled demuxers can hand over: 24-bit
     # big-endian is what camera MOVs record as `in24`, 32-bit integer comes in WAV
-    # (s32le) and MOV (`in32`, s32be), and big-endian / 64-bit float in MOV (`fl32`,
-    # `fl64`). Without them such a track plays SILENT, the same failure the WMA note
-    # above describes. All of them live in the one pcm.c, so the cost is a few table
-    # entries, not code.
+    # (s32le) and MOV (`in32`, s32be), big-endian float in MOV (`fl32`, `fl64`), 64-bit
+    # little-endian float in WAV and Matroska, and signed 8-bit in MOV (`twos` at 8 bits).
+    # Without them such a track plays SILENT, the same failure the WMA note above
+    # describes. All of them live in the one pcm.c, so the cost is a few table entries,
+    # not code.
     --enable-decoder=pcm_s24be --enable-decoder=pcm_s32le --enable-decoder=pcm_s32be
     --enable-decoder=pcm_f32be --enable-decoder=pcm_f64le --enable-decoder=pcm_f64be
+    --enable-decoder=pcm_s8
     # Flash Video audio, the whole tail, all-or-nothing for the same reason the WMA
     # family above is: a decoder missing here is a file that plays as a silent film
     # rather than failing honestly, because the bridge has nothing to open. Nellymoser Asao and ADPCM-SWF are what the
