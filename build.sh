@@ -774,6 +774,16 @@ COMMON_FLAGS=(
     --enable-decoder=mp3float --enable-decoder=opus --enable-decoder=vorbis
     --enable-decoder=truehd --enable-decoder=mlp --enable-decoder=dca --enable-decoder=alac
     --enable-decoder=pcm_s16le --enable-decoder=pcm_s24le --enable-decoder=pcm_f32le
+    # The other integer and float PCM shapes the enabled demuxers can hand over: 24-bit
+    # big-endian is what camera MOVs record as `in24`, 32-bit integer comes in WAV
+    # (s32le) and MOV (`in32`, s32be), big-endian float in MOV (`fl32`, `fl64`), 64-bit
+    # little-endian float in WAV and Matroska, and signed 8-bit in MOV (`twos` at 8 bits).
+    # Without them such a track plays SILENT, the same failure the WMA note above
+    # describes. All of them live in the one pcm.c, so the cost is a few table entries,
+    # not code.
+    --enable-decoder=pcm_s24be --enable-decoder=pcm_s32le --enable-decoder=pcm_s32be
+    --enable-decoder=pcm_f32be --enable-decoder=pcm_f64le --enable-decoder=pcm_f64be
+    --enable-decoder=pcm_s8
     # Flash Video audio, the whole tail, all-or-nothing for the same reason the WMA
     # family above is: a decoder missing here is a file that plays as a silent film
     # rather than failing honestly, because the bridge has nothing to open. Nellymoser Asao and ADPCM-SWF are what the
@@ -793,6 +803,9 @@ COMMON_FLAGS=(
     # still carry MP2. Not legal in fMP4 so AetherEngine's AudioBridge
     # decodes to PCM and re-encodes as FLAC. ~5 KB binary cost.
     --enable-decoder=mp2
+    # MP1 (MPEG-1 Layer I), the oldest member of the same family, for the rare file that
+    # still carries it. It shares mpegaudiodec with mp2, its patents expired long ago.
+    --enable-decoder=mp1
     --enable-decoder=ass --enable-decoder=srt --enable-decoder=subrip
     --enable-decoder=movtext --enable-decoder=dvdsub --enable-decoder=dvbsub
     --enable-decoder=pgssub --enable-decoder=webvtt
