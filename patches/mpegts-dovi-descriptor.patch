@@ -1,0 +1,84 @@
+avformat/mpegtsenc: write the Dolby Vision descriptors
+
+The demuxer reads the DOVI video stream descriptor (0xb0) into the
+stream's AV_PKT_DATA_DOVI_CONF record, but the muxer never wrote it. A
+Dolby Vision HEVC stream copied from one transport stream into another
+therefore kept every RPU NAL unit and lost its configuration record,
+and a player that recognises Dolby Vision from the record treats the
+copy as HDR10 (Profile 8.1), HLG (Profile 8.4) or, for Profile 5, as
+HDR10 with the wrong colours, because IPT-PQ-c2 is then decoded as
+YCbCr. AetherEngine's live recordings stream-copy into MPEG-TS and hit
+exactly that.
+
+The muxer now writes, for a video stream whose record says a base layer
+is present, the 'DOVI' registration descriptor and the DOVI video
+stream descriptor from Dolby's "Dolby Vision streams within the MPEG-2
+transport stream format": version, profile, level, the three present
+flags, then dv_bl_signal_compatibility_id and dv_md_compression with
+the two reserved bits set. A stream without a base layer is left as it
+was, since its descriptor needs the PID of its base layer, which the
+record does not carry. Without a record nothing changes.
+
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 96cdea9..60b5e60 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -23,6 +23,7 @@
+ #include "libavutil/bswap.h"
+ #include "libavutil/crc.h"
+ #include "libavutil/dict.h"
++#include "libavutil/dovi_meta.h"
+ #include "libavutil/intreadwrite.h"
+ #include "libavutil/mathematics.h"
+ #include "libavutil/mem.h"
+@@ -352,6 +353,42 @@ static void put_registration_descriptor(uint8_t **q_ptr, uint32_t tag)
+     *q_ptr = q;
+ }
+ 
++/* Dolby Vision streams within the MPEG-2 transport stream format: the 'DOVI'
++ * registration descriptor followed by the DOVI video stream descriptor, built
++ * from the stream's configuration record. A stream without a base layer would
++ * also need the PID of its base layer, which the record does not carry, so
++ * only a stream with a base layer gets them. */
++static void put_dovi_descriptor(uint8_t **q_ptr, const AVCodecParameters *par)
++{
++    const AVPacketSideData *sd = av_packet_side_data_get(par->coded_side_data,
++                                                         par->nb_coded_side_data,
++                                                         AV_PKT_DATA_DOVI_CONF);
++    const AVDOVIDecoderConfigurationRecord *dovi;
++    uint8_t *q;
++
++    if (!sd)
++        return;
++    dovi = (const AVDOVIDecoderConfigurationRecord *)sd->data;
++    if (!dovi->bl_present_flag)
++        return;
++
++    put_registration_descriptor(q_ptr, MKTAG('D', 'O', 'V', 'I'));
++    q = *q_ptr;
++    *q++ = DOVI_VIDEO_STREAM_DESCRIPTOR;
++    *q++ = 5;
++    *q++ = dovi->dv_version_major;
++    *q++ = dovi->dv_version_minor;
++    put16(&q, (dovi->dv_profile & 0x7f) << 9 |
++              (dovi->dv_level   & 0x3f) << 3 |
++              !!dovi->rpu_present_flag << 2 |
++              !!dovi->el_present_flag  << 1 |
++              1 /* bl_present_flag */);
++    *q++ = (dovi->dv_bl_signal_compatibility_id & 0x0f) << 4 |
++           (dovi->dv_md_compression & 0x03) << 2 |
++           0x03 /* reserved */;
++    *q_ptr = q;
++}
++
+ static int get_dvb_stream_type(AVFormatContext *s, AVStream *st)
+ {
+     MpegTSWrite *ts = s->priv_data;
+@@ -812,6 +849,7 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+                        stream_type == STREAM_TYPE_VIDEO_AVS3) {
+                 put_registration_descriptor(&q, MKTAG('A', 'V', 'S', 'V'));
+             }
++            put_dovi_descriptor(&q, st->codecpar);
+             break;
+         case AVMEDIA_TYPE_DATA:
+             if (codec_id == AV_CODEC_ID_SMPTE_KLV) {
