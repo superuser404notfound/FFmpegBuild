@@ -1604,6 +1604,26 @@ patch_ffmpeg_matroska_byte_seek_done() {
     }
 }
 
+patch_ffmpeg_mpegts_dovi_descriptor() {
+    # AetherEngine live recordings. mpegts.c reads the DOVI video stream descriptor (0xb0)
+    # into AV_PKT_DATA_DOVI_CONF, but mpegtsenc.c never writes it, so a Dolby Vision stream
+    # copied into a transport stream keeps its RPUs and loses its record. A player that
+    # recognises Dolby Vision from the record then plays the copy as HDR10 (Profile 8.1),
+    # HLG (Profile 8.4) or HDR10 with the wrong colours (Profile 5). The patch writes the
+    # 'DOVI' registration descriptor and the 0xb0 descriptor from the record, for a stream
+    # with a base layer; one without a base layer needs its base layer's PID, which the
+    # record does not carry, and is left as it was.
+    local P="${SCRIPT_DIR}/patches/mpegts-dovi-descriptor.patch"
+    if grep -q "put_dovi_descriptor" "${FFMPEG_SRC}/libavformat/mpegtsenc.c"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: the mpegts muxer writes the Dolby Vision descriptors"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: mpegts Dolby Vision descriptor patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1624,6 +1644,7 @@ patch_ffmpeg_dca_x_heights
 patch_ffmpeg_av1_delayed_rap
 patch_ffmpeg_matroska_skip_attachments
 patch_ffmpeg_matroska_byte_seek_done
+patch_ffmpeg_mpegts_dovi_descriptor
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
