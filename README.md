@@ -57,6 +57,7 @@ Anything the app layer should already handle or doesn't need:
 ./build.sh static   # static variant, for apps that can meet LGPL 6(a) themselves
 ./build.sh package  # repackage frameworks without recompiling
 ./build.sh clean    # wipe everything
+./build.sh --without-dtsx-heights   # leave out the DTS:X height patch, see below
 ```
 
 Needs Xcode 16+ and roughly 10-30 minutes depending on your machine. All sources (FFmpeg, dav1d, zimg, libzvbi) clone on first run.
@@ -75,7 +76,7 @@ dependencies: [
 .product(name: "AetherFFmpegBuild", package: "FFmpegBuild")
 ```
 
-Pin `branch: "main"` instead of a version if you want to track the latest rebuilds (that is how [AetherEngine](https://github.com/superuser404notfound/AetherEngine) consumes it).
+Pin `branch: "main"` instead of a version if you want to track the latest rebuilds. [AetherEngine](https://github.com/superuser404notfound/AetherEngine) pins a release with `.upToNextMinor(from:)`.
 
 Then import the modules you need: `AetherLibavformat`, `AetherLibavcodec`, `AetherLibavutil`, `AetherLibswresample`, `AetherLibswscale`, `AetherLibavfilter`, `AetherLibdav1d`. (`AetherLibzimg` is a link-only backend for `zscale`, and `AetherLibzvbi` a link-only backend for the teletext decoder; you don't import either directly.) The umbrella `AetherFFmpegBuild` product links all of them plus the system frameworks (AudioToolbox, CoreMedia, CoreVideo, VideoToolbox) in one shot.
 
@@ -154,12 +155,43 @@ The frameworks that call one of Apple's required-reason APIs carry their own `Pr
 - **`patch_ffmpeg_mpegts_dovi_descriptor`** (`patches/mpegts-dovi-descriptor.patch`): the `mpegts` muxer writes the Dolby Vision descriptors. The demuxer reads the DOVI video stream descriptor (`0xb0`) into the stream's `AV_PKT_DATA_DOVI_CONF` record, but the muxer never wrote it, so a Dolby Vision stream copied into a transport stream kept every RPU and lost its record. AetherEngine's live recordings are such a copy: played back, Profile 8.1 came out as HDR10, Profile 8.4 as HLG and Profile 5 as HDR10 with the wrong colours. A video stream whose record declares a base layer now gets the `DOVI` registration descriptor and the `0xb0` descriptor from that record (version, profile, level, the present flags, base-layer compatibility id, metadata compression). A stream without a base layer is left as it was, because its descriptor also needs its base layer's PID, which the record does not carry. Without a record nothing changes.
 - **`patch_ffmpeg_matroska_tts`**: `matroskadec.c` logs a warning when a Matroska track carries a `TrackTimestampScale` other than 1.0. Timestamp behavior stays exactly as upstream implements it, which is what RFC 9559 specifies (block timestamps and BlockDuration are Track Ticks). The element is deprecated (maxver 3) and many readers ignore it, so a file carrying it may have been authored against such readers and mistime silently; the warning surfaces that condition (AetherEngine issue 145). Until 2.1.x this patch clamped TTS to 1.0; the clamp rested on a wrong reading of the RFC and was dropped after upstream review (FFmpeg PR 23852).
 
+## Building without the DTS:X height patch
+
+`./build.sh --without-dtsx-heights` builds everything as usual but leaves out `patch_ffmpeg_dca_x_heights`. The `dca` decoder is then upstream's. DTS core, DTS-HD Master Audio and the 7.1 bed of DTS:X decode exactly as in stock FFmpeg n8.1.3, and the decoder has no `x_heights` or `x_presentation` option. The flag combines with `static`.
+
+This is for apps that build AetherEngine without its `DTSXObjectAudio` trait (off by default) and want the height decoder out of the shipped binary too, not just unused (FFmpegBuild#12). The released xcframeworks always carry the patch, so this variant is one you build yourself.
+
+- A source tree patched by an earlier build gets the four files the patch touches put back to the tag, so you can switch in either direction without `clean`.
+- `BUILD-INFO.txt` then says `DTS:X heights patch left out (--without-dtsx-heights)`, and `DTSXHeightsOptionTests` checks that the option is absent instead of present.
+- AetherEngine with the trait off never asks for the option. With the trait on against such a build, it logs `no x_heights option` and plays DTS:X as its 7.1 bed.
+
+To ship it, the app has to resolve your build instead of this repo, for AetherEngine too:
+
+1. Fork this repo, run `./build.sh --without-dtsx-heights` and commit `Sources/` and `BUILD-INFO.txt`.
+2. Tag that commit with the version you built from. AetherEngine requires FFmpegBuild within a version range, so the tag has to fall inside it. Your fork already carries that tag pointing at the patched binaries; delete it there first.
+3. Point SwiftPM at the fork with a mirror. For a package, run `swift package config set-mirror --original https://github.com/superuser404notfound/FFmpegBuild --mirror https://github.com/<you>/FFmpegBuild`. For an Xcode project, put the same mirror into `YourApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/mirrors.json` (and into the `.xcworkspace` if you open one), then run File > Packages > Resolve Package Versions:
+
+```json
+{
+  "object" : [
+    {
+      "mirror" : "https://github.com/<you>/FFmpegBuild",
+      "original" : "https://github.com/superuser404notfound/FFmpegBuild"
+    }
+  ],
+  "version" : 1
+}
+```
+
+Your fork is then the source of the build you ship, which is what step 3 under [Shipping in an App Store app](#shipping-in-an-app-store-app) links to.
+
 ## Build record
 
 The binaries are built on a local Mac, not in CI, so there is no attestation. Instead every build writes `BUILD-INFO.txt`, committed with the binaries it describes:
 
 - the upstream tag and resolved commit of FFmpeg, dav1d, zimg and libzvbi, and a SHA-256 over the changes the patch functions made to each tree (tracked edits plus added files such as the libzvbi stub),
 - the SHA-256 of `build.sh` and of every file in `patches/`,
+- whether the DTS:X height patch was applied or left out (`--without-dtsx-heights`; a record without that line applied it),
 - macOS, Xcode, clang and SDK versions, and the versions of meson, ninja, autotools and pkg-config,
 - FFmpeg's configure line for every slice, as recorded in its `config.h`,
 - the SHA-256 of every shipped binary.

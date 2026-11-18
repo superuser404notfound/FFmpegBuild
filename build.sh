@@ -8,6 +8,7 @@
 #   ./build.sh static   # Build static variant (not App Store friendly for closed-source apps)
 #   ./build.sh package  # Repackage frameworks from existing build products
 #   ./build.sh clean    # Remove all build artifacts
+#   ./build.sh --without-dtsx-heights   # Leave out patches/dca-xll-x-heights.patch (see README)
 #
 set -eo pipefail  # pipefail so `... | tail -N` doesn't swallow configure/make errors
 
@@ -41,12 +42,14 @@ ZVBI_SRC="${BUILD_DIR}/zvbi-src"
 # available for people who build themselves and can meet LGPL 6(a) instead.
 MODE="build"
 LINKAGE="dynamic"
+DTSX_HEIGHTS="applied"
 for ARG in "$@"; do
     case "${ARG}" in
         clean)   MODE="clean" ;;
         package) MODE="package" ;;
         static)  LINKAGE="static" ;;
         dynamic) LINKAGE="dynamic" ;;
+        --without-dtsx-heights) DTSX_HEIGHTS="left out (--without-dtsx-heights)" ;;
         *) echo "Unknown argument: ${ARG}"; exit 1 ;;
     esac
 done
@@ -1325,6 +1328,7 @@ record_build_inputs() {
         echo "Built      $(date -u +%Y-%m-%dT%H:%M:%SZ), linkage ${LINKAGE}"
         echo "Repo HEAD  $(git -C "${SCRIPT_DIR}" rev-parse HEAD)${DIRTY}"
         echo "build.sh   sha256 $(shasum -a 256 "${SCRIPT_DIR}/build.sh" | cut -d' ' -f1)"
+        echo "DTS:X heights patch ${DTSX_HEIGHTS}"
         for P in "${SCRIPT_DIR}"/patches/*(N); do
             echo "patches/${P:t}  sha256 $(shasum -a 256 "${P}" | cut -d' ' -f1)"
         done
@@ -1534,6 +1538,16 @@ patch_ffmpeg_dca_x_heights() {
     # substitution would be unreadable. The patch header explains the format.
     local P="${SCRIPT_DIR}/patches/dca-xll-x-heights.patch"
     local -a files=(libavcodec/dca_xll.c libavcodec/dca_xll.h libavcodec/dcadec.c libavcodec/dcadec.h)
+    if [[ "${DTSX_HEIGHTS}" != "applied" ]]; then
+        # FFmpegBuild#12: for apps that ship without AetherEngine's DTSXObjectAudio trait and
+        # want the implementation out of the binary too. The tree may still carry the patch
+        # from an earlier build, so put the four files back to the tag.
+        if grep -q '"x_heights"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
+            git -C "${FFMPEG_SRC}" checkout -- "${files[@]}"
+        fi
+        echo "→ Leaving out the DTS:X height patch (--without-dtsx-heights)"
+        return
+    fi
     if grep -q '"x_presentation"' "${FFMPEG_SRC}/libavcodec/dcadec.c"; then
         return
     fi
