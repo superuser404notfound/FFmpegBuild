@@ -1638,6 +1638,28 @@ patch_ffmpeg_mpegts_dovi_descriptor() {
     }
 }
 
+patch_ffmpeg_mov_lazy_frag_index() {
+    # A fragmented MP4 without a complete sidx is indexed by reading every top-level moof
+    # before the header returns, one seek each: over a network that is a request per
+    # fragment before the first packet (a 4 minute, 96 fragment file on a WAN address:
+    # about 12 s and 90 requests to open). The patch adds a mov demuxer option
+    # "lazy_frag_index" (off by default) that stops the header behind the first moof and
+    # lets a seek find its fragment on demand: byte interpolation, resynchronisation on
+    # the next moof, tfdt bisection, with the mfra as a hint when the file has one. A seek
+    # lands where it lands with the full index. Files whose fragments carry no tfdt, or
+    # whose end cannot be found, are read as before. Without the option the demuxer is
+    # unchanged.
+    local P="${SCRIPT_DIR}/patches/mov-lazy-frag-index.patch"
+    if grep -q '"lazy_frag_index"' "${FFMPEG_SRC}/libavformat/mov.c"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: mov lazy_frag_index option"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: mov lazy fragment index patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1659,6 +1681,7 @@ patch_ffmpeg_av1_delayed_rap
 patch_ffmpeg_matroska_skip_attachments
 patch_ffmpeg_matroska_byte_seek_done
 patch_ffmpeg_mpegts_dovi_descriptor
+patch_ffmpeg_mov_lazy_frag_index
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
