@@ -27,6 +27,13 @@ to a sync sample when the fragment does not start with one, forwards for a
 forward seek, and backwards for the other audio and video streams, whose
 sample at the seek time a muxer may have put in an earlier fragment.
 
+A stream that follows the seeked one, and a seeked stream that is not the
+reference track, also reads the fragments after the one the seek resolved
+to, as far as its sample can be there: forward to the fragment that holds
+it, so that a video stream starts on a sync sample when fragments do not
+start with one, and backward while the next fragment starts the stream at
+or before the seek time.
+
 The streams get their durations when the file opens, from the last
 fragment of each track: through the mfra when there is one, else by
 resynchronising near the end of the file. A file is read as before, every
@@ -41,7 +48,10 @@ Differences from a full index that remain with the option on:
 - a file with a separate moof per track delivers the same packets with the
   same timestamps in file order, a video fragment and then the audio
   fragment behind it, rather than interleaved by timestamp across them;
-- boxes behind the last fragment other than the mfra are not read.
+- boxes behind the last fragment other than the mfra are not read;
+- a forward seek past the last sync sample of a stream leaves the streams
+  that follow the seeked one at their end; a full index leaves them where
+  they were.
 
 Measured on the file above over the same WAN address: 0.9 s and 4 requests
 to open instead of 12 s and about 90, identical stream durations, and 30
@@ -67,11 +77,10 @@ are those of the unpatched demuxer.
      int headers_read;
      int current;
      int nb_stream_info;
-@@ -164,6 +166,21 @@
-     int nb_items;
+@@ -165,6 +167,21 @@
      MOVFragmentIndexItem * item;
  } MOVFragmentIndex;
-+
+ 
 +/* lazy_frag_index: a fragment found by resynchronising or by following the box chain */
 +typedef struct MOVLazyFrag {
 +    int64_t offset;         ///< of the moof
@@ -86,10 +95,11 @@ are those of the unpatched demuxer.
 +    int64_t time;           ///< tfra time of the reference track
 +    int64_t offset;         ///< tfra moof offset
 +} MOVLazyHint;
- 
++
  typedef struct MOVIndexRange {
      int64_t start;
-@@ -377,6 +394,23 @@
+     int64_t end;
+@@ -377,6 +394,24 @@
      int have_read_mfra_size;
      uint32_t mfra_size;
      uint32_t max_stts_delta;
@@ -101,6 +111,7 @@ are those of the unpatched demuxer.
 +    int64_t lazy_media_end;     ///< where the fragments end: the mfra, else the file size
 +    int64_t lazy_first;         ///< offset of the first fragment of the reference track
 +    int64_t lazy_floor;         ///< offset of the earliest fragment the last seek read
++    int64_t lazy_seek_frag;     ///< offset of the fragment the last seek resolved to
 +    int64_t lazy_dur_sum;       ///< reference track duration of the known fragments
 +    int lazy_dur_count;
 +    MOVLazyFrag *lazy_frags;    ///< known fragments, by offset
@@ -168,10 +179,13 @@ are those of the unpatched demuxer.
              c->frag_index.complete = 1;
      }
  
-@@ -9570,7 +9591,927 @@
- 
-     return ret;
- }
+@@ -9567,10 +9588,930 @@
+     for (int i = 0; i < nb_atoms; i++)
+         av_free(atoms[i].data);
+     av_free(atoms);
++
++    return ret;
++}
 +
 +/*
 + * Lazy fragment index (option lazy_frag_index).
@@ -304,7 +318,7 @@ are those of the unpatched demuxer.
 +            int64_t samples = 0;
 +            unsigned def_dur = 0, def_size = 0;
 +            int stream = -1, tfhd = 0;
- 
++
 +            for (q = 8; q < cs;) {
 +                const uint8_t *b = t + q;
 +                int64_t bs;
@@ -815,7 +829,7 @@ are those of the unpatched demuxer.
 +    index = mov_lazy_find(c, lo);
 +    return index;
 +}
-+
+ 
 +/**
 + * The reference-track fragment before the one at offset.
 + *
@@ -983,7 +997,7 @@ are those of the unpatched demuxer.
 +
 +    for (int n = 0; ret >= 0 && n < 65536; n++)
 +        ret = mov_lazy_next(c, pb, c->lazy_frags[ret].offset);
-+    return ret;
+     return ret;
 +}
 +
 +/**
@@ -1082,8 +1096,8 @@ are those of the unpatched demuxer.
 +        av_log(c->fc, AV_LOG_VERBOSE, "fragments cannot be indexed lazily, reading them all\n");
 +    av_free(before);
 +    avio_seek(pb, pos, SEEK_SET);
-+}
-+
+ }
+ 
 +static int mov_lazy_active(MOVContext *c, AVIOContext *pb)
 +{
 +    if (!c->lazy_state && c->lazy_frag_index && c->trex_data &&
@@ -1096,26 +1110,35 @@ are those of the unpatched demuxer.
  static const MOVParseTableEntry mov_default_parse_table[] = {
  { MKTAG('A','C','L','R'), mov_read_aclr },
  { MKTAG('A','P','R','G'), mov_read_avid },
-@@ -9799,6 +10740,18 @@
-                  start_pos + a.size == avio_size(pb))) {
-                 if (!(pb->seekable & AVIO_SEEKABLE_NORMAL) || c->fc->flags & AVFMT_FLAG_IGNIDX || c->frag_index.complete)
-                     c->next_root_atom = start_pos + a.size;
-+                c->atom_depth --;
-+                return 0;
-+            }
-+            if (c->lazy_frag_index && atom.type == MKTAG('r','o','o','t') &&
-+                c->found_moov && c->found_mdat && a.size <= INT64_MAX - start_pos &&
-+                mov_lazy_active(c, pb)) {
-+                c->next_root_atom = start_pos + a.size;
-+                if (c->frag_index.current >= 0 && c->frag_index.current < c->frag_index.nb_items) {
-+                    /* also when reading on got here: a later seek must not read it again */
-+                    c->frag_index.item[c->frag_index.current].headers_read = 1;
-+                    c->frag_index.item[c->frag_index.current].lazy_next    = c->next_root_atom;
-+                }
+@@ -9802,6 +10743,27 @@
                  c->atom_depth --;
                  return 0;
              }
-@@ -10210,6 +11163,9 @@
++            if (c->lazy_frag_index && atom.type == MKTAG('r','o','o','t') &&
++                c->found_moov && c->found_mdat && a.size <= INT64_MAX - start_pos &&
++                mov_lazy_active(c, pb)) {
++                int cur = c->frag_index.current;
++                c->next_root_atom = start_pos + a.size;
++                /* Only when this box belongs to the current fragment: after a seek,
++                 * current is the last fragment the seek read, and reading on can be
++                 * behind an earlier one (an mdat in front of the first moof, then
++                 * that moof's own mdat). Noting it there made the fragment its own
++                 * successor, and reading switched to it forever. */
++                if (cur >= 0 && cur < c->frag_index.nb_items &&
++                    c->frag_index.item[cur].moof_offset <= start_pos &&
++                    (cur + 1 == c->frag_index.nb_items ||
++                     c->frag_index.item[cur + 1].moof_offset > start_pos)) {
++                    /* also when reading on got here: a later seek must not read it again */
++                    c->frag_index.item[cur].headers_read = 1;
++                    c->frag_index.item[cur].lazy_next    = c->next_root_atom;
++                }
++                c->atom_depth --;
++                return 0;
++            }
+             left = a.size - avio_tell(pb) + start_pos;
+             if (left > 0) /* skip garbage at atom end */
+                 avio_skip(pb, left);
+@@ -10210,6 +11172,9 @@
          av_freep(&mov->frag_index.item[i].stream_info);
      }
      av_freep(&mov->frag_index.item);
@@ -1125,7 +1148,7 @@ are those of the unpatched demuxer.
  
      av_freep(&mov->aes_decrypt);
      av_freep(&mov->chapter_tracks);
-@@ -11101,7 +12057,7 @@
+@@ -11101,7 +12066,7 @@
          }
      }
  
@@ -1134,7 +1157,7 @@ are those of the unpatched demuxer.
          for (i = 0; i < s->nb_streams; i++) {
              AVStream *st = s->streams[i];
              MOVStreamContext *sc = st->priv_data;
-@@ -11257,6 +12213,11 @@
+@@ -11257,6 +12222,11 @@
          mov->frag_index.item[index].moof_offset == target) {
          if (index + 1 < mov->frag_index.nb_items)
              mov->next_root_atom = mov->frag_index.item[index + 1].moof_offset;
@@ -1146,7 +1169,7 @@ are those of the unpatched demuxer.
          if (mov->frag_index.item[index].headers_read)
              return 0;
          mov->frag_index.item[index].headers_read = 1;
-@@ -11455,6 +12416,12 @@
+@@ -11455,6 +12425,12 @@
              mov->frag_index.allocated_size = 0;
              mov->frag_index.current = -1;
              mov->frag_index.complete = 0;
@@ -1159,15 +1182,15 @@ are those of the unpatched demuxer.
          }
  
          for (i = 0; i < s->nb_streams; i++) {
-@@ -11609,11 +12576,236 @@
+@@ -11609,11 +12585,297 @@
      return 0;
  }
  
 -static int mov_seek_fragment(AVFormatContext *s, AVStream *st, int64_t timestamp)
 +/* Read the headers of the fragment at offset, unless they have been read. */
 +static int mov_lazy_load(AVFormatContext *s, int64_t offset)
-+{
-+    MOVContext *mov = s->priv_data;
+ {
+     MOVContext *mov = s->priv_data;
 +    int index = update_frag_index(mov, offset);
 +
 +    if (index < 0)
@@ -1252,7 +1275,7 @@ are those of the unpatched demuxer.
 +    index = mov_lazy_resolve(mov, s->pb, t);
 +    if (index < 0)
 +        return index;
-+    offset = floor = cur = mov->lazy_frags[index].offset;
++    offset = floor = cur = mov->lazy_seek_frag = mov->lazy_frags[index].offset;
 +    av_log(s, AV_LOG_DEBUG, "lazy seek: stream %d time %"PRId64" is in the fragment at 0x%"PRIx64
 +           " (%"PRId64" to %"PRId64"), %d fragments known\n", st->index, t, offset,
 +           mov->lazy_frags[index].time, mov->lazy_frags[index].time_end, mov->nb_lazy_frags);
@@ -1386,9 +1409,70 @@ are those of the unpatched demuxer.
 +    return changed;
 +}
 +
++/* The stream's first sample in the (loaded) fragment at offset, or NULL. */
++static const AVIndexEntry *mov_lazy_first_sample(MOVContext *mov, AVStream *st, int64_t offset)
++{
++    const MOVStreamContext *sc = st->priv_data;
++    const FFStream *sti = ffstream(st);
++    int index = search_frag_moof_offset(&mov->frag_index, offset);
++    const MOVFragmentStreamInfo *info = get_frag_stream_info(&mov->frag_index, index, sc->id);
++
++    if (!info || info->index_entry < 0 || info->index_entry >= sti->nb_index_entries)
++        return NULL;
++    return &sti->index_entries[info->index_entry];
++}
++
++/**
++ * Read the fragments from the one the seek resolved to onwards for an audio or
++ * video stream that is positioned without having resolved a fragment of its own
++ * (one that follows the seeked stream, or a seeked stream that is not the
++ * reference track), as far as a complete index could have its sample there:
++ * - forward, until a fragment holds the sample the seek stops at; else the
++ *   nearest sample known could lie behind fragments not read yet, or the stream
++ *   could start on the first sample read, which need not be a sync sample when
++ *   fragments do not start with one;
++ * - backward, while the next fragment starts the stream at or before timestamp:
++ *   a muxer may begin a track's fragment slightly earlier than the reference
++ *   track's, so the sample at timestamp can be in the fragment after.
++ */
++static int mov_lazy_seek_forward(AVFormatContext *s, AVStream *st, int64_t timestamp, int flags)
++{
++    MOVContext *mov = s->priv_data;
++    int64_t cur = mov->lazy_seek_frag, resume = mov->next_root_atom;
++    int index, ret = 0, missing = 0;
++
++    if ((st->disposition & AV_DISPOSITION_ATTACHED_PIC) ||
++        (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
++         st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO))
++        return 0;
++    for (int n = 0; n < 256; n++) {
++        if ((ret = mov_lazy_load(s, cur)) < 0)
++            break;
++        if (flags & AVSEEK_FLAG_BACKWARD) {
++            const AVIndexEntry *first = mov_lazy_first_sample(mov, st, cur);
++            if (n && first && first->timestamp > timestamp)
++                break;
++            /* a stream that has ended does not come back */
++            if (!first && ++missing == 8)
++                break;
++        } else if (mov_lazy_has_sample(mov, st, cur, timestamp, flags)) {
++            break;
++        }
++        index = mov_lazy_next(mov, s->pb, cur);
++        if (index < 0) {
++            ret = index < MOV_LAZY_INVALID ? index : 0;
++            break;
++        }
++        cur = mov->lazy_frags[index].offset;
++    }
++    /* loading moved the root atom; reading still resumes behind the floor */
++    mov->next_root_atom = resume;
++    return ret;
++}
++
 +static int mov_seek_fragment(AVFormatContext *s, AVStream *st, int64_t timestamp, int flags)
- {
-     MOVContext *mov = s->priv_data;
++{
++    MOVContext *mov = s->priv_data;
      int index;
  
 +    if (mov->lazy_state > 0 && !mov->frag_index.complete)
@@ -1397,7 +1481,7 @@ are those of the unpatched demuxer.
      if (!mov->frag_index.complete)
          return 0;
  
-@@ -11684,7 +12876,7 @@
+@@ -11684,15 +12946,24 @@
      // can search over the DTS timeline.
      timestamp -= (sc->min_corrected_pts + sc->dts_shift);
  
@@ -1405,8 +1489,16 @@ are those of the unpatched demuxer.
 +    ret = mov_seek_fragment(s, st, timestamp, flags);
      if (ret < 0)
          return ret;
++    {
++        MOVContext *mov = s->priv_data;
++        if (mov->lazy_state > 0 && !mov->frag_index.complete && mov->lazy_seek_phase != 2 &&
++            (mov->lazy_seek_phase == 1 || st->index != mov->lazy_ref_stream) &&
++            (ret = mov_lazy_seek_forward(s, st, timestamp, flags)) < 0)
++            return ret;
++    }
  
-@@ -11693,6 +12885,8 @@
+     for (;;) {
+         sample = av_index_search_timestamp(st, timestamp, flags);
          av_log(s, AV_LOG_TRACE, "stream %d, timestamp %"PRId64", sample %d\n", st->index, timestamp, sample);
          if (sample < 0 && sti->nb_index_entries && timestamp < sti->index_entries[0].timestamp)
              sample = 0;
@@ -1415,12 +1507,10 @@ are those of the unpatched demuxer.
          if (sample < 0) /* not sure what to do */
              return AVERROR_INVALIDDATA;
  
-@@ -11711,6 +12905,25 @@
-             break;
- 
+@@ -11713,6 +12984,25 @@
          timestamp = next_ts;
-+    }
-+
+     }
+ 
 +    /* Lazy fragment index: the stream index has holes. A stream that follows the
 +     * seeked one starts in the fragments that seek read, never in older ones that
 +     * happen to be the nearest known. */
@@ -1438,10 +1528,12 @@ are those of the unpatched demuxer.
 +            sc->tts_sample = 0;
 +            return AVERROR(EAGAIN);
 +        }
-     }
- 
++    }
++
      mov_current_sample_set(sc, sample);
-@@ -11777,6 +12990,7 @@
+     av_log(s, AV_LOG_TRACE, "stream %d, found sample %d\n", st->index, sc->current_sample);
+     /* adjust time to sample index */
+@@ -11777,6 +13067,7 @@
  
      st = s->streams[stream_index];
      sti = ffstream(st);
@@ -1449,7 +1541,7 @@ are those of the unpatched demuxer.
      sample = mov_seek_stream(s, st, sample_time, flags);
      if (sample < 0)
          return sample;
-@@ -11784,6 +12998,21 @@
+@@ -11784,6 +13075,21 @@
      if (mc->seek_individually) {
          /* adjust seek timestamp to found sample timestamp */
          int64_t seek_timestamp = sti->index_entries[sample].timestamp;
@@ -1471,7 +1563,7 @@ are those of the unpatched demuxer.
          sti->skip_samples = mov_get_skip_samples(st, sample);
  
          for (i = 0; i < s->nb_streams; i++) {
-@@ -11795,7 +13024,9 @@
+@@ -11795,7 +13101,9 @@
                  continue;
  
              timestamp = av_rescale_q(seek_timestamp, s->streams[stream_index]->time_base, st->time_base);
@@ -1481,7 +1573,7 @@ are those of the unpatched demuxer.
              if (sample >= 0)
                  sti->skip_samples = mov_get_skip_samples(st, sample);
          }
-@@ -11872,6 +13103,8 @@
+@@ -11872,6 +13180,8 @@
          {.i64 = 0}, 0, 1, FLAGS },
      { "max_stts_delta", "treat offsets above this value as invalid", OFFSET(max_stts_delta), AV_OPT_TYPE_INT, {.i64 = UINT_MAX-48000*10 }, 0, UINT_MAX, .flags = AV_OPT_FLAG_DECODING_PARAM },
      { "interleaved_read", "Interleave packets from multiple tracks at demuxer level", OFFSET(interleaved_read), AV_OPT_TYPE_BOOL, {.i64 = 1 }, 0, 1, .flags = AV_OPT_FLAG_DECODING_PARAM },
