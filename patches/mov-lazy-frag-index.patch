@@ -77,10 +77,11 @@ are those of the unpatched demuxer.
      int headers_read;
      int current;
      int nb_stream_info;
-@@ -165,6 +167,21 @@
+@@ -164,7 +166,22 @@
+     int nb_items;
      MOVFragmentIndexItem * item;
  } MOVFragmentIndex;
- 
++
 +/* lazy_frag_index: a fragment found by resynchronising or by following the box chain */
 +typedef struct MOVLazyFrag {
 +    int64_t offset;         ///< of the moof
@@ -90,7 +91,7 @@ are those of the unpatched demuxer.
 +    int64_t time_end;       ///< reference track: tfdt plus the sample durations
 +    int has_ref;            ///< the fragment has samples of the reference track
 +} MOVLazyFrag;
-+
+ 
 +typedef struct MOVLazyHint {
 +    int64_t time;           ///< tfra time of the reference track
 +    int64_t offset;         ///< tfra moof offset
@@ -99,7 +100,7 @@ are those of the unpatched demuxer.
  typedef struct MOVIndexRange {
      int64_t start;
      int64_t end;
-@@ -377,6 +394,24 @@
+@@ -377,6 +394,26 @@
      int have_read_mfra_size;
      uint32_t mfra_size;
      uint32_t max_stts_delta;
@@ -121,6 +122,8 @@ are those of the unpatched demuxer.
 +    int nb_lazy_hints;
 +    int64_t *lazy_track_end;    ///< per stream: latest end of a known fragment, track time scale
 +    int64_t *lazy_sidx_end;     ///< per stream: latest end a sidx between fragments gave
++    int64_t *lazy_chain_end;    ///< per stream: track ends of the moof mov_lazy_chain() parses
++    int64_t *lazy_scan_end;     ///< per stream: track ends of a resynchronised candidate
      int primary_item_id;
      int cur_item_id;
      HEIFItem **heif_item;
@@ -179,7 +182,7 @@ are those of the unpatched demuxer.
              c->frag_index.complete = 1;
      }
  
-@@ -9567,10 +9588,930 @@
+@@ -9567,8 +9588,944 @@
      for (int i = 0; i < nb_atoms; i++)
          av_free(atoms[i].data);
      av_free(atoms);
@@ -277,7 +280,7 @@ are those of the unpatched demuxer.
 + *         the file), AVERROR_INVALIDDATA when this is not a usable moof
 + */
 +static int mov_lazy_parse_moof(MOVContext *c, const uint8_t *buf, int64_t len,
-+                               int64_t offset, MOVLazyFrag *frag)
++                               int64_t offset, MOVLazyFrag *frag, int64_t *ends)
 +{
 +    int64_t file_size = c->lazy_size, left = file_size - offset;
 +    int64_t size, p, mdat_size, mdat_hdr = 8, implicit = offset;
@@ -473,9 +476,20 @@ are those of the unpatched demuxer.
 +    if (data_lo < offset + size + mdat_hdr || data_hi > frag->end)
 +        return AVERROR_INVALIDDATA;
 +
++    for (int i = 0; i < c->fc->nb_streams; i++)
++        ends[i] = AV_NOPTS_VALUE;
 +    for (int i = 0; i < nb_trafs; i++)
-+        c->lazy_track_end[traf_stream[i]] = FFMAX(c->lazy_track_end[traf_stream[i]], traf_end[i]);
++        ends[traf_stream[i]] = FFMAX(ends[traf_stream[i]], traf_end[i]);
 +    return 0;
++}
++
++/* The track ends of a parsed moof count once the fragment is accepted: a candidate
++ * found by resynchronising may still be dropped, and its times are then sample data. */
++static void mov_lazy_take_ends(MOVContext *c, const int64_t *ends)
++{
++    for (int i = 0; i < c->fc->nb_streams; i++)
++        if (ends[i] != AV_NOPTS_VALUE)
++            c->lazy_track_end[i] = FFMAX(c->lazy_track_end[i], ends[i]);
 +}
 +
 +/* A sidx passed over on the way: mov_read_sidx() makes the end of what it describes
@@ -534,18 +548,20 @@ are those of the unpatched demuxer.
 +        type = AV_RL32(buf + 4);
 +        if (type == MKTAG('m','o','o','f')) {
 +            MOVLazyFrag frag;
-+            int ret = mov_lazy_parse_moof(c, buf, len, pos, &frag);
++            int ret = mov_lazy_parse_moof(c, buf, len, pos, &frag, c->lazy_chain_end);
 +            if (ret == AVERROR(EAGAIN)) {
 +                int need = FFMIN(size + 16, left);
 +                uint8_t *big = av_malloc(need);
 +                if (!big)
 +                    return AVERROR(ENOMEM);
 +                ret = mov_lazy_read(pb, pos, big, need) == need ?
-+                      mov_lazy_parse_moof(c, big, need, pos, &frag) : AVERROR_INVALIDDATA;
++                      mov_lazy_parse_moof(c, big, need, pos, &frag, c->lazy_chain_end) :
++                      AVERROR_INVALIDDATA;
 +                av_free(big);
 +            }
 +            if (ret < 0)
 +                return MOV_LAZY_INVALID;
++            mov_lazy_take_ends(c, c->lazy_chain_end);
 +            return mov_lazy_add(c, &frag);
 +        }
 +        if (size == 1) {
@@ -656,7 +672,7 @@ are those of the unpatched demuxer.
 +            while (len - cand < need && !eof)
 +                MOV_LAZY_FILL(FFMAX(need - (len - cand), MOV_LAZY_CHUNK));
 +            if (len - cand >= need &&
-+                !mov_lazy_parse_moof(c, buf + cand, len - cand, coff, &frag)) {
++                !mov_lazy_parse_moof(c, buf + cand, len - cand, coff, &frag, c->lazy_scan_end)) {
 +                int index = mov_lazy_add(c, &frag);
 +                if (index < 0) {
 +                    ret = index;
@@ -666,6 +682,7 @@ are those of the unpatched demuxer.
 +                if (ret < MOV_LAZY_INVALID)
 +                    goto end;
 +                if (ret != MOV_LAZY_INVALID) {
++                    mov_lazy_take_ends(c, c->lazy_scan_end);
 +                    ret = mov_lazy_find(c, coff);
 +                    goto end;
 +                }
@@ -1024,10 +1041,12 @@ are those of the unpatched demuxer.
 +            break;
 +        }
 +    }
-+    c->lazy_track_end = av_malloc_array(c->fc->nb_streams, 2 * sizeof(*c->lazy_track_end));
++    c->lazy_track_end = av_malloc_array(c->fc->nb_streams, 4 * sizeof(*c->lazy_track_end));
 +    if (!c->lazy_track_end)
 +        return;
-+    c->lazy_sidx_end = c->lazy_track_end + c->fc->nb_streams;
++    c->lazy_sidx_end  = c->lazy_track_end + c->fc->nb_streams;
++    c->lazy_chain_end = c->lazy_track_end + 2 * c->fc->nb_streams;
++    c->lazy_scan_end  = c->lazy_track_end + 3 * c->fc->nb_streams;
 +    for (int i = 0; i < 2 * c->fc->nb_streams; i++)
 +        c->lazy_track_end[i] = AV_NOPTS_VALUE;
 +
@@ -1096,8 +1115,8 @@ are those of the unpatched demuxer.
 +        av_log(c->fc, AV_LOG_VERBOSE, "fragments cannot be indexed lazily, reading them all\n");
 +    av_free(before);
 +    avio_seek(pb, pos, SEEK_SET);
- }
- 
++}
++
 +static int mov_lazy_active(MOVContext *c, AVIOContext *pb)
 +{
 +    if (!c->lazy_state && c->lazy_frag_index && c->trex_data &&
@@ -1105,12 +1124,10 @@ are those of the unpatched demuxer.
 +        c->frag_index.nb_items && !c->frag_index.complete)
 +        mov_lazy_init(c, pb);
 +    return c->lazy_state > 0 && !c->frag_index.complete;
-+}
-+
+ }
+ 
  static const MOVParseTableEntry mov_default_parse_table[] = {
- { MKTAG('A','C','L','R'), mov_read_aclr },
- { MKTAG('A','P','R','G'), mov_read_avid },
-@@ -9802,6 +10743,27 @@
+@@ -9802,6 +10759,27 @@
                  c->atom_depth --;
                  return 0;
              }
@@ -1138,7 +1155,7 @@ are those of the unpatched demuxer.
              left = a.size - avio_tell(pb) + start_pos;
              if (left > 0) /* skip garbage at atom end */
                  avio_skip(pb, left);
-@@ -10210,6 +11172,9 @@
+@@ -10210,6 +11188,9 @@
          av_freep(&mov->frag_index.item[i].stream_info);
      }
      av_freep(&mov->frag_index.item);
@@ -1148,7 +1165,7 @@ are those of the unpatched demuxer.
  
      av_freep(&mov->aes_decrypt);
      av_freep(&mov->chapter_tracks);
-@@ -11101,7 +12066,7 @@
+@@ -11101,7 +12082,7 @@
          }
      }
  
@@ -1157,7 +1174,7 @@ are those of the unpatched demuxer.
          for (i = 0; i < s->nb_streams; i++) {
              AVStream *st = s->streams[i];
              MOVStreamContext *sc = st->priv_data;
-@@ -11257,6 +12222,11 @@
+@@ -11257,6 +12238,11 @@
          mov->frag_index.item[index].moof_offset == target) {
          if (index + 1 < mov->frag_index.nb_items)
              mov->next_root_atom = mov->frag_index.item[index + 1].moof_offset;
@@ -1169,7 +1186,7 @@ are those of the unpatched demuxer.
          if (mov->frag_index.item[index].headers_read)
              return 0;
          mov->frag_index.item[index].headers_read = 1;
-@@ -11455,6 +12425,12 @@
+@@ -11455,6 +12441,12 @@
              mov->frag_index.allocated_size = 0;
              mov->frag_index.current = -1;
              mov->frag_index.complete = 0;
@@ -1182,7 +1199,7 @@ are those of the unpatched demuxer.
          }
  
          for (i = 0; i < s->nb_streams; i++) {
-@@ -11609,11 +12585,297 @@
+@@ -11609,11 +12601,297 @@
      return 0;
  }
  
@@ -1481,7 +1498,7 @@ are those of the unpatched demuxer.
      if (!mov->frag_index.complete)
          return 0;
  
-@@ -11684,15 +12946,24 @@
+@@ -11684,15 +12962,24 @@
      // can search over the DTS timeline.
      timestamp -= (sc->min_corrected_pts + sc->dts_shift);
  
@@ -1507,7 +1524,7 @@ are those of the unpatched demuxer.
          if (sample < 0) /* not sure what to do */
              return AVERROR_INVALIDDATA;
  
-@@ -11713,6 +12984,25 @@
+@@ -11713,6 +13000,25 @@
          timestamp = next_ts;
      }
  
@@ -1533,7 +1550,7 @@ are those of the unpatched demuxer.
      mov_current_sample_set(sc, sample);
      av_log(s, AV_LOG_TRACE, "stream %d, found sample %d\n", st->index, sc->current_sample);
      /* adjust time to sample index */
-@@ -11777,6 +13067,7 @@
+@@ -11777,6 +13083,7 @@
  
      st = s->streams[stream_index];
      sti = ffstream(st);
@@ -1541,7 +1558,7 @@ are those of the unpatched demuxer.
      sample = mov_seek_stream(s, st, sample_time, flags);
      if (sample < 0)
          return sample;
-@@ -11784,6 +13075,21 @@
+@@ -11784,6 +13091,21 @@
      if (mc->seek_individually) {
          /* adjust seek timestamp to found sample timestamp */
          int64_t seek_timestamp = sti->index_entries[sample].timestamp;
@@ -1563,7 +1580,7 @@ are those of the unpatched demuxer.
          sti->skip_samples = mov_get_skip_samples(st, sample);
  
          for (i = 0; i < s->nb_streams; i++) {
-@@ -11795,7 +13101,9 @@
+@@ -11795,7 +13117,9 @@
                  continue;
  
              timestamp = av_rescale_q(seek_timestamp, s->streams[stream_index]->time_base, st->time_base);
@@ -1573,7 +1590,7 @@ are those of the unpatched demuxer.
              if (sample >= 0)
                  sti->skip_samples = mov_get_skip_samples(st, sample);
          }
-@@ -11872,6 +13180,8 @@
+@@ -11872,6 +13196,8 @@
          {.i64 = 0}, 0, 1, FLAGS },
      { "max_stts_delta", "treat offsets above this value as invalid", OFFSET(max_stts_delta), AV_OPT_TYPE_INT, {.i64 = UINT_MAX-48000*10 }, 0, UINT_MAX, .flags = AV_OPT_FLAG_DECODING_PARAM },
      { "interleaved_read", "Interleave packets from multiple tracks at demuxer level", OFFSET(interleaved_read), AV_OPT_TYPE_BOOL, {.i64 = 1 }, 0, 1, .flags = AV_OPT_FLAG_DECODING_PARAM },
