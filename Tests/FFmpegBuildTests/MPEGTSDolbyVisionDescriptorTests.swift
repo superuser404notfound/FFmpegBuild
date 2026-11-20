@@ -91,28 +91,34 @@ struct MPEGTSDolbyVisionDescriptorTests {
         return av_write_trailer(ctx) >= 0
     }
 
-    /// The record a player reads back from the file, or nil when the stream has none.
-    private static func readBack(path: String) -> Record?? {
+    /// The record a player reads back from the file (nil when the stream has none) and the
+    /// stream's codec tag.
+    private static func readBack(path: String) -> (record: Record?, codecTag: UInt32)? {
         var ctxIn: UnsafeMutablePointer<AVFormatContext>?
-        guard avformat_open_input(&ctxIn, path, nil, nil) == 0, let ctx = ctxIn else { return .none }
+        guard avformat_open_input(&ctxIn, path, nil, nil) == 0, let ctx = ctxIn else { return nil }
         defer { avformat_close_input(&ctxIn) }
         guard ctx.pointee.nb_streams == 1,
               let par = ctx.pointee.streams[0]?.pointee.codecpar,
-              par.pointee.codec_id == AV_CODEC_ID_HEVC else { return .none }
+              par.pointee.codec_id == AV_CODEC_ID_HEVC else { return nil }
+        let codecTag = par.pointee.codec_tag
         guard let side = av_packet_side_data_get(par.pointee.coded_side_data, par.pointee.nb_coded_side_data,
-                                                 AV_PKT_DATA_DOVI_CONF) else { return .some(nil) }
+                                                 AV_PKT_DATA_DOVI_CONF) else { return (nil, codecTag) }
         let dovi = UnsafeRawPointer(side.pointee.data!).assumingMemoryBound(
             to: AVDOVIDecoderConfigurationRecord.self).pointee
-        return .some(Record(profile: dovi.dv_profile, level: dovi.dv_level, rpu: dovi.rpu_present_flag,
-                            el: dovi.el_present_flag, bl: dovi.bl_present_flag,
-                            compatibility: dovi.dv_bl_signal_compatibility_id,
-                            compression: dovi.dv_md_compression))
+        return (Record(profile: dovi.dv_profile, level: dovi.dv_level, rpu: dovi.rpu_present_flag,
+                       el: dovi.el_present_flag, bl: dovi.bl_present_flag,
+                       compatibility: dovi.dv_bl_signal_compatibility_id,
+                       compression: dovi.dv_md_compression), codecTag)
     }
 
     private struct RoundTrip {
         let record: Record?
+        let codecTag: UInt32
         let hasDoviRegistration: Bool
     }
+
+    /// 'HEVC' as the little-endian FourCC the demuxer stores in codec_tag.
+    private static let hevcTag: UInt32 = 0x4356_4548
 
     private static func roundTrip(_ record: Record?) throws -> RoundTrip? {
         let path = FileManager.default.temporaryDirectory
@@ -123,7 +129,7 @@ struct MPEGTSDolbyVisionDescriptorTests {
         let registered = bytes.indices.dropLast(doviRegistration.count).contains {
             bytes[$0..<($0 + doviRegistration.count)].elementsEqual(doviRegistration)
         }
-        return RoundTrip(record: read, hasDoviRegistration: registered)
+        return RoundTrip(record: read.record, codecTag: read.codecTag, hasDoviRegistration: registered)
     }
 
     @Test("a Dolby Vision record survives the mpegts muxer", arguments: [
@@ -138,12 +144,26 @@ struct MPEGTSDolbyVisionDescriptorTests {
         let result = try #require(try Self.roundTrip(record))
         // Stock FFmpeg reads back no record: the PMT carries only the 'HEVC' registration.
         #expect(result.record == record)
-        #expect(result.hasDoviRegistration)
+        // Dolby's TS spec asks for the 'DOVI' registration only with compatibility ID 0
+        // (section 7.1.2), and the demuxer reads the 0xb0 descriptor without it.
+        #expect(result.hasDoviRegistration == (record.compatibility == 0))
+        // The demuxer keeps the last registration as codec_tag, so 'DOVI' has to come first
+        // or a stream copy to AVI loses its FourCC.
+        #expect(result.codecTag == Self.hevcTag)
     }
 
     @Test("a stream without a record gets no Dolby Vision descriptor")
     func noRecordNoDescriptor() throws {
         let result = try #require(try Self.roundTrip(nil))
+        #expect(result.record == nil)
+        #expect(!result.hasDoviRegistration)
+    }
+
+    @Test("a base layer without its RPU gets no descriptor")
+    func baseLayerWithoutRPUIsLeftAlone() throws {
+        // What dovi_split=mode=bl leaves of a Profile 7 stream: plain HEVC, not Dolby Vision.
+        let result = try #require(try Self.roundTrip(
+            Record(profile: 7, level: 6, rpu: 0, el: 0, compatibility: 6)))
         #expect(result.record == nil)
         #expect(!result.hasDoviRegistration)
     }

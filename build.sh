@@ -1623,12 +1623,13 @@ patch_ffmpeg_mpegts_dovi_descriptor() {
     # into AV_PKT_DATA_DOVI_CONF, but mpegtsenc.c never writes it, so a Dolby Vision stream
     # copied into a transport stream keeps its RPUs and loses its record. A player that
     # recognises Dolby Vision from the record then plays the copy as HDR10 (Profile 8.1),
-    # HLG (Profile 8.4) or HDR10 with the wrong colours (Profile 5). The patch writes the
-    # 'DOVI' registration descriptor and the 0xb0 descriptor from the record, for a stream
-    # with a base layer; one without a base layer needs its base layer's PID, which the
-    # record does not carry, and is left as it was.
+    # HLG (Profile 8.4) or HDR10 with the wrong colours (Profile 5). The patch is the muxer
+    # half of FFmpeg PR 26097: an H.264 or HEVC stream whose record carries its base layer
+    # and its RPU gets the 0xb0 descriptor, and with compatibility ID 0 (Profile 5) also the
+    # 'DOVI' registration, written before the codec's own so codec_tag stays HEVC. Drop it
+    # once the upstream commit is in the pinned tag.
     local P="${SCRIPT_DIR}/patches/mpegts-dovi-descriptor.patch"
-    if grep -q "put_dovi_descriptor" "${FFMPEG_SRC}/libavformat/mpegtsenc.c"; then
+    if grep -q "put_dovi_descriptors" "${FFMPEG_SRC}/libavformat/mpegtsenc.c"; then
         return
     fi
     echo "→ Patching FFmpeg: the mpegts muxer writes the Dolby Vision descriptors"
