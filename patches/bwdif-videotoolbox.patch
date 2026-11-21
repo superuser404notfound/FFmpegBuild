@@ -14,13 +14,17 @@ The wrapper is vf_yadif_videotoolbox.m with bwdif's options (mode
 send_frame / send_field, default send_field; parity; deint) and the
 frame handling of yadif_common.c. It submits each frame to the GPU once,
 all planes in one command buffer, and handles its failure paths like the
-yadif_videotoolbox patch: a NULL texture or a missing command buffer stops
-the frame, a command buffer that ends in error is logged.
+yadif_videotoolbox patch. A NULL texture or a missing command buffer stops
+the frame, and a command buffer that ends in error is logged. Formats the
+kernel cannot run (packed, deeper than 10 bits, more than two channels per
+texel, planes under 3x4) are refused when the output is configured, before
+an output pool is allocated.
 
 Checked with framemd5 against CPU bwdif on 1080i TFF and 480i BFF
 MPEG-2, testsrc2 at 1080 and 38x10, NV12 and P010, send_field and
-send_frame, parity auto and forced: identical on every frame. On an M1 a
-1080p59.94 field costs 2.19 ms against 1.90 ms for yadif_videotoolbox.
+send_frame, parity auto and forced. Every frame is identical. On an M1 a
+1080p59.94 field costs 2.19 ms against 1.90 ms for yadif_videotoolbox in
+the same run.
 
 Written by classicjazz for AetherEngine issue 1102.
 ---
@@ -65,7 +69,7 @@ index e26859e..1f62658 100644
  extern const FFFilter ff_vf_chromaber_vulkan;
 diff --git a/libavfilter/metal/vf_bwdif_videotoolbox.metal b/libavfilter/metal/vf_bwdif_videotoolbox.metal
 new file mode 100644
-index 0000000..6b9db54
+index 0000000..6a41590
 --- /dev/null
 +++ b/libavfilter/metal/vf_bwdif_videotoolbox.metal
 @@ -0,0 +1,182 @@
@@ -192,8 +196,8 @@ index 0000000..6b9db54
 +        return;
 +    }
 +
-+    // bwdifdsp.c names: prev2 / next2 are the frames holding this row's field,
-+    // before and after; prev / next are the frames either side of cur.
++    // In bwdifdsp.c's names, prev2 / next2 are the frames holding this row's
++    // field, before and after, and prev / next are the frames either side of cur.
 +    const bool prev2_is_prev = (p.parity ^ p.tff) != 0;
 +    src_tex prev2 = prev2_is_prev ? prev : cur;
 +    src_tex next2 = prev2_is_prev ? cur  : next;
@@ -253,10 +257,10 @@ index 0000000..6b9db54
 +}
 diff --git a/libavfilter/vf_bwdif_videotoolbox.m b/libavfilter/vf_bwdif_videotoolbox.m
 new file mode 100644
-index 0000000..2209530
+index 0000000..862309e
 --- /dev/null
 +++ b/libavfilter/vf_bwdif_videotoolbox.m
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,506 @@
 +/*
 + * Copyright (C) 2018 Philip Langdale <philipl@overt.org>
 + *               2020 Aman Karmani <aman@tmm1.net>
@@ -617,9 +621,40 @@ index 0000000..2209530
 +    AVFilterContext *ctx = link->src;
 +    BWDIFVTContext *s = ctx->priv;
 +    YADIFContext *y = &s->yadif;
++    const AVPixFmtDescriptor *desc;
 +    int ret = 0;
 +
 +    av_assert0(s->input_frames);
++
++    // Refuse what the kernel cannot run before an output pool is allocated, so the
++    // graph fails at configuration instead of on every frame.
++    desc = av_pix_fmt_desc_get(s->input_frames->sw_format);
++    if (!desc || !(desc->flags & AV_PIX_FMT_FLAG_PLANAR)) {
++        av_log(ctx, AV_LOG_ERROR, "Pixel format %s is not planar, which is not supported\n",
++               desc ? desc->name : "unknown");
++        return AVERROR(ENOSYS);
++    }
++    for (int i = 0; i < desc->nb_components; i++) {
++        const AVComponentDescriptor *comp = &desc->comp[i];
++        int pixel_size = (comp->depth + comp->shift) / 8;
++        // The kernel does its integer math in floats, which is exact up to 10-bit samples.
++        if (comp->depth > 10) {
++            av_log(ctx, AV_LOG_ERROR, "Pixel format %s is deeper than 10 bits, which is not supported\n",
++                   desc->name);
++            return AVERROR(ENOSYS);
++        }
++        if (pixel_size < 1 || pixel_size > 2 || comp->step / pixel_size > 2) {
++            av_log(ctx, AV_LOG_ERROR, "Unsupported pixel format: %s\n", desc->name);
++            return AVERROR(ENOSYS);
++        }
++    }
++    // The kernel reads up to four rows away and mirrors at most three, as vf_bwdif.c does.
++    if (AV_CEIL_RSHIFT(ctx->inputs[0]->w, desc->log2_chroma_w) < 3 ||
++        AV_CEIL_RSHIFT(ctx->inputs[0]->h, desc->log2_chroma_h) < 4) {
++        av_log(ctx, AV_LOG_ERROR, "Video with planes less than 3 columns or 4 lines is not supported\n");
++        return AVERROR(EINVAL);
++    }
++
 +    s->device_ref = av_buffer_ref(s->input_frames->device_ref);
 +    if (!s->device_ref) {
 +        av_log(ctx, AV_LOG_ERROR, "A device reference create "
@@ -661,24 +696,6 @@ index 0000000..2209530
 +
 +    y->csp = av_pix_fmt_desc_get(output_frames->sw_format);
 +    y->filter = filter;
-+
-+    // The kernel does its integer math in floats, which is exact up to 10-bit samples.
-+    for (int i = 0; i < y->csp->nb_components; i++) {
-+        if (y->csp->comp[i].depth > 10) {
-+            av_log(ctx, AV_LOG_ERROR, "Pixel format %s is deeper than 10 bits, which is not supported\n",
-+                   y->csp->name);
-+            ret = AVERROR(ENOSYS);
-+            goto exit;
-+        }
-+    }
-+
-+    // The kernel reads up to four rows away and mirrors at most three, as vf_bwdif.c does.
-+    if (AV_CEIL_RSHIFT(link->w, y->csp->log2_chroma_w) < 3 ||
-+        AV_CEIL_RSHIFT(link->h, y->csp->log2_chroma_h) < 4) {
-+        av_log(ctx, AV_LOG_ERROR, "Video with planes less than 3 columns or 4 lines is not supported\n");
-+        ret = AVERROR(EINVAL);
-+        goto exit;
-+    }
 +
 +exit:
 +    return ret;

@@ -1665,9 +1665,9 @@ patch_ffmpeg_mov_lazy_frag_index() {
 patch_ffmpeg_bwdif_videotoolbox() {
     # AetherEngine #1102. Upstream has bwdif for CUDA and Vulkan but not for Metal, so the GPU
     # path ran yadif while the CPU fallback ran bwdif, and a session's picture depended on which
-    # one it got. The patch adds bwdif_videotoolbox: the yadif_videotoolbox wrapper with bwdif's
-    # options, and a Metal kernel doing bwdifdsp.c's integer arithmetic on integer samples held
-    # in floats (exact up to 10 bits; deeper formats are refused). Its output equals CPU bwdif
+    # one it got. The patch adds bwdif_videotoolbox, which is the yadif_videotoolbox wrapper with
+    # bwdif's options and a Metal kernel doing bwdifdsp.c's integer arithmetic on integer samples
+    # held in floats (exact up to 10 bits; deeper formats are refused). Its output equals CPU bwdif
     # frame for frame (framemd5, NV12 and P010, both modes, both parities). It submits each
     # frame once, like the yadif_videotoolbox patch.
     local P="${SCRIPT_DIR}/patches/bwdif-videotoolbox.patch"
