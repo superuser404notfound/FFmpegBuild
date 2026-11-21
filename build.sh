@@ -89,28 +89,27 @@ fetch_ffmpeg() {
     git clone --depth 1 --branch "${FFMPEG_VERSION}" "${FFMPEG_REPO}" "${FFMPEG_SRC}"
 }
 
-patch_ffmpeg() {
-    # Upstream bug in vf_yadif_videotoolbox.m (present through n8.1.2): call_kernel gets
-    # commandBuffer / computeCommandEncoder from property getters, which return AUTORELEASED
-    # (+0) objects under FFmpeg's non-ARC ObjC build, then releases them manually via
-    # ff_objc_release, an over-release. (The s->mtl* releases in uninit ARE correct: those are
-    # +1 objects from newCommandQueue/newLibrary etc.) ffmpeg's CLI never pops a pool on its
-    # filter threads so it goes unnoticed; a host app's GCD queues pop their last-resort pool
-    # when the work block ends, crashing at session teardown (EXC_BAD_ACCESS in
-    # AutoreleasePoolPage::releaseUntil). Fix: wrap the kernel call in @autoreleasepool and drop
-    # the manual releases, so the pool pop is the single balanced release and Metal transients
-    # drain per frame.
+patch_ffmpeg_yadif_videotoolbox() {
+    # AetherEngine #1101. vf_yadif_videotoolbox.m committed a command buffer and waited for it
+    # once per plane, so an NV12 or P010 frame went to the GPU twice and the decode thread
+    # waited twice. The patch puts both planes into one command buffer with one wait (output
+    # unchanged, framemd5-identical; 2.34 -> 1.86 ms per 1080p field on an M1). It also carries
+    # the older autorelease fix: commandBuffer / computeCommandEncoder are +0 under FFmpeg's
+    # non-ARC build and upstream released them by hand, which crashed host apps whose GCD
+    # queues pop their pool at session teardown (EXC_BAD_ACCESS in
+    # AutoreleasePoolPage::releaseUntil). Upstream still has both.
     local F="${FFMPEG_SRC}/libavfilter/vf_yadif_videotoolbox.m"
-    grep -q "@autoreleasepool" "${F}" && return
-    echo "→ Patching FFmpeg: balance autoreleased Metal objects in yadif_videotoolbox"
-    perl -0777 -pi -e '
-s#\{\n    YADIFVTContext \*s = ctx->priv;\n    id<MTLCommandBuffer> buffer#{\n    YADIFVTContext *s = ctx->priv;\n    \@autoreleasepool {\n    id<MTLCommandBuffer> buffer#;
-s#    ff_objc_release\(&encoder\);\n    ff_objc_release\(&buffer\);\n\}#    } // \@autoreleasepool: buffer + encoder are +0 autoreleased by their getters.\n      // Upstream released them manually here (over-release); the pool pop above\n      // is the single balanced release. See FFmpegBuild build.sh patch_ffmpeg.\n}#;
-' "${F}"
-    if ! grep -q "@autoreleasepool" "${F}"; then
-        echo "ERROR: yadif_videotoolbox autorelease patch did not apply (upstream source changed?)"
-        exit 1
+    local P="${SCRIPT_DIR}/patches/yadif-videotoolbox-one-submission.patch"
+    grep -q "encode_plane" "${F}" && return
+    # A tree patched by an older build carries the inline perl edit that came before this patch.
+    if grep -q "@autoreleasepool" "${F}"; then
+        git -C "${FFMPEG_SRC}" checkout -- libavfilter/vf_yadif_videotoolbox.m
     fi
+    echo "→ Patching FFmpeg: yadif_videotoolbox sends each frame to the GPU once (AetherEngine #1101)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: yadif_videotoolbox patch did not apply (upstream source changed?)"
+        exit 1
+    }
 }
 
 patch_ffmpeg_pgssub() {
@@ -1668,7 +1667,7 @@ echo "║  Linkage: ${LINKAGE}                     ║"
 echo "╚══════════════════════════════════════╝"
 
 fetch_ffmpeg
-patch_ffmpeg
+patch_ffmpeg_yadif_videotoolbox
 patch_ffmpeg_pgssub
 patch_ffmpeg_visionos
 patch_ffmpeg_matroska_tts
