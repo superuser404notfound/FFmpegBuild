@@ -102,7 +102,7 @@ patch_ffmpeg_yadif_videotoolbox() {
     local P="${SCRIPT_DIR}/patches/yadif-videotoolbox-one-submission.patch"
     grep -q "encode_plane" "${F}" && return
     # A tree patched by an older build carries the inline perl edit that came before this patch.
-    if grep -q "@autoreleasepool" "${F}"; then
+    if grep -q "See FFmpegBuild build.sh patch_ffmpeg\." "${F}"; then
         git -C "${FFMPEG_SRC}" checkout -- libavfilter/vf_yadif_videotoolbox.m
     fi
     echo "→ Patching FFmpeg: yadif_videotoolbox sends each frame to the GPU once (AetherEngine #1101)"

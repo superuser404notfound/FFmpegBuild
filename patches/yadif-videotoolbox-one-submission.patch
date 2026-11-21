@@ -21,8 +21,12 @@ Two fixes ride along, because the rewrite owns these lines:
   @autoreleasepool is now their only release. (Until now FFmpegBuild fixed
   this with an inline perl edit in build.sh.)
 - ff_metal_texture_from_pixbuf returns NULL when the texture cache fails,
-  and that NULL went into CFRelease. The filter now returns without
-  dispatching, as it already did for an unsupported pixel format.
+  and that NULL went into CFRelease. The filter now stops at that plane,
+  as it already did for an unsupported pixel format; planes encoded before
+  it still run.
+
+A missing command buffer or encoder and a command buffer that ends in
+error are logged now; both went out as a frame without a word before.
 
 Proposed in AetherEngine issue 1101.
 ---
@@ -95,25 +99,29 @@ Proposed in AetherEngine issue 1101.
  }
  
  static void filter(AVFilterContext *ctx, AVFrame *dst,
-@@ -105,13 +97,24 @@
+@@ -105,13 +97,27 @@
  {
      YADIFVTContext *s = ctx->priv;
      YADIFContext *y = &s->yadif;
 +    // Four textures per plane, at most four planes. The GPU reads them after the
 +    // loop, so they are released after the wait.
 +    CVMetalTextureRef textures[16] = { NULL };
-+    int nb_textures = 0, ret = 0;
++    int nb_textures = 0, nb_planes = 0, failed = 0;
      int i;
  
-+    // commandBuffer and computeCommandEncoder return autoreleased (+0) objects, and
-+    // FFmpeg builds Objective-C without ARC, so the pool pop is their only release.
-+    // Upstream also released them by hand, an over-release that crashes a host app
-+    // whose GCD queue pops its pool at session teardown.
+-    for (i = 0; i < y->csp->nb_components; i++) {
++    // commandBuffer and computeCommandEncoder return autoreleased (+0) objects and
++    // this file is built without ARC, so the pool pop is their only release.
 +    @autoreleasepool {
 +    id<MTLCommandBuffer> buffer = s->mtlQueue.commandBuffer;
 +    id<MTLComputeCommandEncoder> encoder = buffer.computeCommandEncoder;
 +
-     for (i = 0; i < y->csp->nb_components; i++) {
++    if (!buffer || !encoder) {
++        av_log(ctx, AV_LOG_ERROR, "Failed to create Metal command buffer or encoder\n");
++        failed = 1;
++    }
++
++    for (i = 0; i < y->csp->nb_components && !failed; i++) {
          int pixel_size, channels;
          const AVComponentDescriptor *comp = &y->csp->comp[i];
 -        CVMetalTextureRef prev, cur, next, dest;
@@ -122,25 +130,25 @@ Proposed in AetherEngine issue 1101.
          MTLPixelFormat format;
  
          if (comp->plane < i) {
-@@ -124,7 +127,8 @@
+@@ -124,7 +130,8 @@
          channels = comp->step / pixel_size;
          if (pixel_size > 2 || channels > 2) {
              av_log(ctx, AV_LOG_ERROR, "Unsupported pixel format: %s\n", y->csp->name);
 -            goto exit;
-+            ret = AVERROR(ENOSYS);
++            failed = 1;
 +            break;
          }
          switch (pixel_size) {
          case 1:
-@@ -135,39 +139,53 @@
+@@ -135,39 +142,60 @@
              break;
          default:
              av_log(ctx, AV_LOG_ERROR, "Unsupported pixel format: %s\n", y->csp->name);
 -            goto exit;
-+            ret = AVERROR(ENOSYS);
++            failed = 1;
 +            break;
          }
-+        if (ret < 0)
++        if (failed)
 +            break;
          av_log(ctx, AV_LOG_TRACE,
                 "Deinterlacing plane %d: pixel_size: %d channels: %d\n",
@@ -155,9 +163,9 @@ Proposed in AetherEngine issue 1101.
 +        tex[2] = ff_metal_texture_from_pixbuf(ctx, s->textureCache, (CVPixelBufferRef)y->next->data[3], i, format);
 +        tex[3] = ff_metal_texture_from_pixbuf(ctx, s->textureCache, (CVPixelBufferRef)dst->data[3], i, format);
 +        nb_textures += 4;
-+        // The helper has logged the failure. Before, a NULL texture went into CFRelease.
++        // The helper has logged the failure.
 +        if (!tex[0] || !tex[1] || !tex[2] || !tex[3]) {
-+            ret = AVERROR(ENOMEM);
++            failed = 1;
 +            break;
 +        }
  
@@ -171,14 +179,22 @@ Proposed in AetherEngine issue 1101.
 +                     CVMetalTextureGetTexture(tex[1]),
 +                     CVMetalTextureGetTexture(tex[2]),
 +                     channels, parity, tff);
++        nb_planes++;
 +    }
  
 -        call_kernel(ctx, tex_dest, tex_prev, tex_cur, tex_next,
 -                         channels, parity, tff);
 +    [encoder endEncoding];
-+    if (ret >= 0) {
++    // Planes encoded before a failure still run, as they did with one
++    // submission per plane.
++    if (nb_planes) {
 +        [buffer commit];
 +        [buffer waitUntilCompleted];
++        if (buffer.status == MTLCommandBufferStatusError) {
++            av_log(ctx, AV_LOG_ERROR, "Metal command buffer failed: %s\n",
++                   buffer.error.description.UTF8String);
++            failed = 1;
++        }
 +    }
 +    }
  
@@ -190,10 +206,10 @@ Proposed in AetherEngine issue 1101.
 +        if (textures[i])
 +            CFRelease(textures[i]);
      }
-+    if (ret < 0)
-+        return;
  
-     CVBufferPropagateAttachments((CVPixelBufferRef)y->cur->data[3], (CVPixelBufferRef)dst->data[3]);
+-    CVBufferPropagateAttachments((CVPixelBufferRef)y->cur->data[3], (CVPixelBufferRef)dst->data[3]);
++    if (!failed)
++        CVBufferPropagateAttachments((CVPixelBufferRef)y->cur->data[3], (CVPixelBufferRef)dst->data[3]);
  
      if (y->current_field == YADIF_FIELD_END) {
          y->current_field = YADIF_FIELD_NORMAL;
@@ -204,7 +220,7 @@ Proposed in AetherEngine issue 1101.
  }
  
  static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios(8.0))
-@@ -180,7 +198,6 @@
+@@ -180,7 +208,6 @@
      av_buffer_unref(&s->input_frames_ref);
      s->input_frames = NULL;
  
@@ -212,7 +228,7 @@ Proposed in AetherEngine issue 1101.
      ff_objc_release(&s->mtlFunction);
      ff_objc_release(&s->mtlPipeline);
      ff_objc_release(&s->mtlQueue);
-@@ -245,14 +262,6 @@
+@@ -245,14 +272,6 @@
          error:&err];
      if (err) {
          av_log(ctx, AV_LOG_ERROR, "Failed to create Metal compute pipeline: %s\n", err.description.UTF8String);
