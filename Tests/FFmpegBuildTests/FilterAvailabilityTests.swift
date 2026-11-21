@@ -35,6 +35,16 @@ struct FilterAvailabilityTests {
         #expect(avfilter_get_by_name("yadif") != nil)
     }
 
+    @Test("GPU deinterlacers are available")
+    func gpuDeinterlacersAvailable() {
+        // AetherEngine deinterlaces VideoToolbox frames with bwdif_videotoolbox
+        // (patches/bwdif-videotoolbox.patch) and falls back to yadif_videotoolbox;
+        // hwupload gets the frames there.
+        for name in ["bwdif_videotoolbox", "yadif_videotoolbox", "hwupload"] {
+            #expect(avfilter_get_by_name(name) != nil, "\(name) missing")
+        }
+    }
+
     @Test("inverse telecine filters are available")
     func inverseTelecineAvailable() {
         // AetherEngine#853 detects telecine with idet and undoes it with

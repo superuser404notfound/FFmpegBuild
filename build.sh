@@ -97,7 +97,8 @@ patch_ffmpeg_yadif_videotoolbox() {
     # the older autorelease fix: commandBuffer / computeCommandEncoder are +0 under FFmpeg's
     # non-ARC build and upstream released them by hand, which crashed host apps whose GCD
     # queues pop their pool at session teardown (EXC_BAD_ACCESS in
-    # AutoreleasePoolPage::releaseUntil). Upstream still has both.
+    # AutoreleasePoolPage::releaseUntil). n8.1.3 has both; master has the pool since FFmpeg
+    # PR 23850 but still submits per plane.
     local F="${FFMPEG_SRC}/libavfilter/vf_yadif_videotoolbox.m"
     local P="${SCRIPT_DIR}/patches/yadif-videotoolbox-one-submission.patch"
     grep -q "encode_plane" "${F}" && return
@@ -619,16 +620,17 @@ COMMON_FLAGS=(
     # instead of being deinterlaced to 29.97 with judder. All LGPL (mpdecimate
     # would be GPL and is not needed).
     --enable-filter=idet --enable-filter=fieldmatch --enable-filter=decimate
-    # Hardware deinterlacer: yadif_videotoolbox runs the yadif kernel as a
-    # Metal compute shader over AV_PIX_FMT_VIDEOTOOLBOX frames (no
-    # bwdif_videotoolbox exists upstream). hwupload bridges software-decoded
+    # Hardware deinterlacers: bwdif_videotoolbox (patch_ffmpeg_bwdif_videotoolbox,
+    # output equal to CPU bwdif) and yadif_videotoolbox (upstream) run as
+    # Metal compute shaders over AV_PIX_FMT_VIDEOTOOLBOX frames; yadif stays
+    # for hosts that ask for it by name. hwupload bridges software-decoded
     # frames into a VideoToolbox hwframes context so the GPU can deinterlace
     # at field rate (mode=send_field) without the 2x CPU cost of sw bwdif.
     # The dependency chain is "metal corevideo videotoolbox"; Metal is
     # normally autodetected but --disable-autodetect turns it off, so enable
     # it explicitly. The .metal kernel compiles at build time via
     # --metalcc / --metallib, overridden per slice in build_one.
-    --enable-filter=yadif_videotoolbox --enable-filter=hwupload
+    --enable-filter=bwdif_videotoolbox --enable-filter=yadif_videotoolbox --enable-filter=hwupload
     --enable-metal
     --enable-videotoolbox --enable-audiotoolbox
     --enable-libdav1d
@@ -1660,6 +1662,25 @@ patch_ffmpeg_mov_lazy_frag_index() {
     }
 }
 
+patch_ffmpeg_bwdif_videotoolbox() {
+    # AetherEngine #1102. Upstream has bwdif for CUDA and Vulkan but not for Metal, so the GPU
+    # path ran yadif while the CPU fallback ran bwdif, and a session's picture depended on which
+    # one it got. The patch adds bwdif_videotoolbox: the yadif_videotoolbox wrapper with bwdif's
+    # options, and a Metal kernel doing bwdifdsp.c's integer arithmetic on integer samples held
+    # in floats (exact up to 10 bits; deeper formats are refused). Its output equals CPU bwdif
+    # frame for frame (framemd5, NV12 and P010, both modes, both parities). It submits each
+    # frame once, like the yadif_videotoolbox patch.
+    local P="${SCRIPT_DIR}/patches/bwdif-videotoolbox.patch"
+    if [[ -f "${FFMPEG_SRC}/libavfilter/vf_bwdif_videotoolbox.m" ]]; then
+        return
+    fi
+    echo "→ Patching FFmpeg: bwdif_videotoolbox, bwdif as a Metal kernel (AetherEngine #1102)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: bwdif_videotoolbox patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1682,6 +1703,7 @@ patch_ffmpeg_matroska_skip_attachments
 patch_ffmpeg_matroska_byte_seek_done
 patch_ffmpeg_mpegts_dovi_descriptor
 patch_ffmpeg_mov_lazy_frag_index
+patch_ffmpeg_bwdif_videotoolbox
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
