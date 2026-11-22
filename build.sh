@@ -620,6 +620,9 @@ COMMON_FLAGS=(
     # instead of being deinterlaced to 29.97 with judder. All LGPL (mpdecimate
     # would be GPL and is not needed).
     --enable-filter=idet --enable-filter=fieldmatch --enable-filter=decimate
+    # The same two on the GPU (patch_ffmpeg_ivtc_videotoolbox, AetherEngine #1108):
+    # fieldmatch and decimate for VideoToolbox frames, output equal to the CPU filters.
+    --enable-filter=fieldmatch_videotoolbox --enable-filter=decimate_videotoolbox
     # Hardware deinterlacers: bwdif_videotoolbox (patch_ffmpeg_bwdif_videotoolbox,
     # output equal to CPU bwdif) and yadif_videotoolbox (upstream) run as
     # Metal compute shaders over AV_PIX_FMT_VIDEOTOOLBOX frames; yadif stays
@@ -1700,6 +1703,26 @@ patch_ffmpeg_vc1_frame_threads() {
     }
 }
 
+patch_ffmpeg_ivtc_videotoolbox() {
+    # AetherEngine #1108 (the inverse telecine of #853). fieldmatch and decimate are plain C on one
+    # thread: about 10 ms a frame at 1080i on an M1 Max, most of it fieldmatch's comb scoring.
+    # The patch adds fieldmatch_videotoolbox and decimate_videotoolbox for VideoToolbox frames.
+    # Their Metal kernels do the per-pixel passes of vf_fieldmatch.c and vf_decimate.c on the
+    # same 8-bit integers and return per-thread sums; the decisions are the CPU filters' code on
+    # the same totals. Output equals the CPU filters frame for frame (framemd5 with timestamps,
+    # every match and drop, 80 option and clip combinations). NV12 only; fieldmatch also refuses
+    # ppsrc, combdbg, chroma=1, the pcn/ub modes and frame heights that are not a multiple of 4.
+    local P="${SCRIPT_DIR}/patches/ivtc-videotoolbox.patch"
+    if [[ -f "${FFMPEG_SRC}/libavfilter/vf_fieldmatch_videotoolbox.m" ]]; then
+        return
+    fi
+    echo "→ Patching FFmpeg: fieldmatch_videotoolbox + decimate_videotoolbox, IVTC as Metal kernels (AetherEngine #1108)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: ivtc_videotoolbox patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1724,6 +1747,7 @@ patch_ffmpeg_mpegts_dovi_descriptor
 patch_ffmpeg_mov_lazy_frag_index
 patch_ffmpeg_bwdif_videotoolbox
 patch_ffmpeg_vc1_frame_threads
+patch_ffmpeg_ivtc_videotoolbox
 fetch_dav1d
 fetch_zimg
 fetch_zvbi

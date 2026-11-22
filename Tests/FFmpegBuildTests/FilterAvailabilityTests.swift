@@ -54,6 +54,16 @@ struct FilterAvailabilityTests {
         }
     }
 
+    @Test("GPU inverse telecine filters are available")
+    func gpuInverseTelecineAvailable() {
+        // fieldmatch_videotoolbox and decimate_videotoolbox
+        // (patches/ivtc-videotoolbox.patch, AetherEngine#1108) run the inverse
+        // telecine of AetherEngine#853 on VideoToolbox frames.
+        for name in ["fieldmatch_videotoolbox", "decimate_videotoolbox"] {
+            #expect(avfilter_get_by_name(name) != nil, "\(name) missing")
+        }
+    }
+
     @Test("audio shaping filters are available")
     func audioShapingAvailable() {
         // AetherEngine#923 builds one graph after its resampler: the stereo
