@@ -183,7 +183,9 @@ The frameworks that call one of Apple's required-reason APIs carry their own `Pr
 
   The CPU time drops everywhere. On clean SD the wall time grows by about 0.8 ms, because the filter thread waits for the GPU, which is far inside a 33 ms frame.
 
-  Supported: NV12, `fieldmatch` modes `pc`, `pc_n` (default) and `pc_u`, `combmatch` none, sc and full, `chroma=0`. Refused when the graph is configured: other pixel formats, `ppsrc`, `combdbg`, `chroma=1`, the `pcn` and `ub` modes, odd `blockx`/`blocky`, and frame heights that are not a multiple of 4 (on a plane with an odd number of rows, `vf_fieldmatch.c` reads a row it never wrote, so its result cannot be reproduced). Not proposed upstream yet.
+  Supported: NV12, `fieldmatch` modes `pc`, `pc_n` (default) and `pc_u`, `combmatch` none, sc and full, `chroma=0`. Refused when the graph is configured: other pixel formats, `ppsrc`, `combdbg`, `chroma=1`, the `pcn` and `ub` modes, frames smaller than 32x16, and frame heights that are not a multiple of 4 (on a plane with an odd number of rows, `vf_fieldmatch.c` reads a row it never wrote, so its result cannot be reproduced). Not proposed upstream yet.
+
+  The GPU filters carry copies of the CPU filters' decision code, so an FFmpeg tag bump can change one side and not the other while the patch still applies. `Tests/ivtc-videotoolbox/` holds the equality checks to run after every such bump (macOS only, they need the GPU).
 - **`patch_ffmpeg_matroska_tts`**: `matroskadec.c` logs a warning when a Matroska track carries a `TrackTimestampScale` other than 1.0. Timestamp behavior stays exactly as upstream implements it, which is what RFC 9559 specifies (block timestamps and BlockDuration are Track Ticks). The element is deprecated (maxver 3) and many readers ignore it, so a file carrying it may have been authored against such readers and mistime silently; the warning surfaces that condition (AetherEngine issue 145). Until 2.1.x this patch clamped TTS to 1.0; the clamp rested on a wrong reading of the RFC and was dropped after upstream review (FFmpeg PR 23852).
 
 ## Building without the DTS:X height patch

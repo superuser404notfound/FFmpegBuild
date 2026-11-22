@@ -139,7 +139,7 @@ index 0000000..7ca60df
 +}
 diff --git a/libavfilter/metal/vf_fieldmatch_videotoolbox.metal b/libavfilter/metal/vf_fieldmatch_videotoolbox.metal
 new file mode 100644
-index 0000000..99a5ebe
+index 0000000..cbeee54
 --- /dev/null
 +++ b/libavfilter/metal/vf_fieldmatch_videotoolbox.metal
 @@ -0,0 +1,336 @@
@@ -175,8 +175,8 @@ index 0000000..99a5ebe
 +
 +using namespace metal;
 +
-+/* Planes are read as unsigned integer textures (R8Uint, RG8Uint): no float
-+ * conversion, the sample is the value. A two-channel plane (NV12's UV) carries
++/* Planes are read as unsigned integer textures (R8Uint, RG8Uint), so there is
++ * no float conversion and the sample is the value. A two-channel plane (NV12's UV) carries
 + * U in .x and V in .y; the CPU filter treats them as two planes, so each lane
 + * is computed on its own and the lanes only meet in the sums. */
 +typedef texture2d<uint, access::read> utex;
@@ -481,10 +481,10 @@ index 0000000..99a5ebe
 +}
 diff --git a/libavfilter/vf_decimate_videotoolbox.m b/libavfilter/vf_decimate_videotoolbox.m
 new file mode 100644
-index 0000000..d3c91fc
+index 0000000..7bf3899
 --- /dev/null
 +++ b/libavfilter/vf_decimate_videotoolbox.m
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,655 @@
 +/*
 + * Frame decimation for VideoToolbox frames, using Metal compute.
 + *
@@ -556,6 +556,7 @@ index 0000000..d3c91fc
 +    int64_t last_duration;  ///< last output duration
 +    int64_t start_pts;      ///< base for output timestamps
 +    uint32_t eof;           ///< end of stream
++    int failed;             ///< a GPU step failed; the queue is no longer consistent
 +    int hsub, vsub;         ///< chroma subsampling values
 +    int depth;
 +    int nxblocks, nyblocks;
@@ -735,6 +736,13 @@ index 0000000..d3c91fc
 +    DecimateVTContext *dm = ctx->priv;
 +    AVFrame *prv;
 +
++    /* After a GPU failure fid may equal cycle and a slot may hold a frame that was never
++     * measured, so nothing more goes into the queue. The queued frames are freed at uninit. */
++    if (dm->failed) {
++        av_frame_free(&in);
++        return AVERROR_EXTERNAL;
++    }
++
 +    /* update frames queue */
 +    dm->queue[dm->fid].frame = in;
 +
@@ -746,17 +754,21 @@ index 0000000..d3c91fc
 +            dm->queue[dm->fid].totdiff  = INT64_MAX;
 +        } else {
 +            ret = submit_diffs(ctx, &dm->queue[dm->fid], prv, in);
-+            if (ret < 0)
++            if (ret < 0) {
++                dm->failed = 1;
 +                return ret;
++            }
 +        }
 +        if (++dm->fid != dm->cycle)
 +            return 0;
 +
-+        /* the cycle is complete: one wait for the whole cycle's metrics */
++        /* The cycle is complete. One wait covers the whole cycle's metrics. */
 +        for (i = 0; i < dm->cycle; i++) {
 +            ret = collect_metrics(ctx, &dm->queue[i]);
-+            if (ret < 0)
++            if (ret < 0) {
++                dm->failed = 1;
 +                return ret;
++            }
 +        }
 +
 +        av_frame_free(&dm->last);
@@ -784,8 +796,10 @@ index 0000000..d3c91fc
 +         * still read, because vf_decimate.c has them by now and logs them. */
 +        for (i = 0; i < dm->cycle; i++) {
 +            ret = collect_metrics(ctx, &dm->queue[i]);
-+            if (ret < 0)
++            if (ret < 0) {
++                dm->failed = 1;
 +                return ret;
++            }
 +        }
 +    }
 +
@@ -1128,10 +1142,10 @@ index 0000000..d3c91fc
 +};
 diff --git a/libavfilter/vf_fieldmatch_videotoolbox.m b/libavfilter/vf_fieldmatch_videotoolbox.m
 new file mode 100644
-index 0000000..7e1326a
+index 0000000..20d69a0
 --- /dev/null
 +++ b/libavfilter/vf_fieldmatch_videotoolbox.m
-@@ -0,0 +1,1035 @@
+@@ -0,0 +1,1041 @@
 +/*
 + * Field matching for VideoToolbox frames, using Metal compute.
 + *
@@ -1143,7 +1157,7 @@ index 0000000..7e1326a
 + *
 + * Supported: NV12 (8-bit 4:2:0, what hwupload makes of yuv420p), modes pc,
 + * pc_n and pc_u, combmatch none/sc/full, chroma=0. Refused at configuration:
-+ * ppsrc, combdbg, chroma=1, the pcn and ub modes, odd blockx/blocky, and
++ * ppsrc, combdbg, chroma=1, the pcn and ub modes, and
 + * planes with an odd number of rows (vf_fieldmatch.c reads a row it never
 + * wrote there, so its result cannot be reproduced).
 + *
@@ -1949,8 +1963,14 @@ index 0000000..7e1326a
 +        av_log(ctx, AV_LOG_ERROR, "Only modes pc, pc_n and pc_u are supported\n");
 +        return AVERROR(ENOSYS);
 +    }
-+    if ((fm->blockx & 1) || (fm->blocky & 1)) {
-+        av_log(ctx, AV_LOG_ERROR, "blockx and blocky must be even\n");
++    /* The same two checks as fieldmatch_init, so both filters take the same options. */
++    if ((fm->blockx & (fm->blockx - 1)) ||
++        (fm->blocky & (fm->blocky - 1))) {
++        av_log(ctx, AV_LOG_ERROR, "blockx and blocky settings must be power of two\n");
++        return AVERROR(EINVAL);
++    }
++    if (fm->combpel > fm->blockx * fm->blocky) {
++        av_log(ctx, AV_LOG_ERROR, "Combed pixel should not be larger than blockx x blocky\n");
 +        return AVERROR(EINVAL);
 +    }
 +
