@@ -1,5 +1,5 @@
 diff --git a/libavcodec/vc1.h b/libavcodec/vc1.h
-index f2a52c1..4e2f5a0 100644
+index f2a52c1..fcf83e6 100644
 --- a/libavcodec/vc1.h
 +++ b/libavcodec/vc1.h
 @@ -27,6 +27,7 @@
@@ -10,7 +10,7 @@ index f2a52c1..4e2f5a0 100644
  #include "intrax8.h"
  #include "vc1_common.h"
  #include "vc1dsp.h"
-@@ -353,6 +354,15 @@ typedef struct VC1Context{
+@@ -353,6 +354,14 @@ typedef struct VC1Context{
      uint8_t *blk_mv_type_base, *blk_mv_type;    ///< 0: frame MV, 1: field MV (interlaced frame)
      uint8_t *mv_f_base, *mv_f[2];               ///< 0: MV obtained from same field, 1: opposite field
      uint8_t *mv_f_next_base, *mv_f_next[2];
@@ -22,11 +22,10 @@ index f2a52c1..4e2f5a0 100644
 +     */
 +    struct AVRefStructPool *mv_f_pool;
 +    uint8_t *mv_f_next_ref;     ///< RefStruct reference: the buffer mv_f_next[0] points into, if any
-+    MPVPicture *mv_f_next_pic;  ///< RefStruct reference: the picture that writes mv_f_next_ref
      int field_mode;         ///< 1 for interlaced field pictures
      int fptype;
      int second_field;
-@@ -440,4 +450,55 @@ void ff_vc1_mc_4mv_chroma4(VC1Context *v, int dir, int dir2, int avg);
+@@ -440,4 +449,55 @@ void ff_vc1_mc_4mv_chroma4(VC1Context *v, int dir, int dir2, int avg);
  
  void ff_vc1_interp_mc(VC1Context *v);
  
@@ -83,7 +82,7 @@ index f2a52c1..4e2f5a0 100644
 +
  #endif /* AVCODEC_VC1_H */
 diff --git a/libavcodec/vc1_block.c b/libavcodec/vc1_block.c
-index a84c853..00c6b41 100644
+index a84c853..0c4ba0f 100644
 --- a/libavcodec/vc1_block.c
 +++ b/libavcodec/vc1_block.c
 @@ -2607,6 +2607,7 @@ static void vc1_decode_i_blocks(VC1Context *v)
@@ -110,21 +109,19 @@ index a84c853..00c6b41 100644
      }
      ff_er_add_slice(&s->er, 0, s->start_mb_y << v->field_mode, s->mb_width - 1,
                      (s->end_mb_y << v->field_mode) - 1, ER_MB_END);
-@@ -2869,6 +2872,13 @@ static void vc1_decode_b_blocks(VC1Context *v)
+@@ -2869,6 +2872,11 @@ static void vc1_decode_b_blocks(VC1Context *v)
      for (s->mb_y = s->start_mb_y; s->mb_y < s->end_mb_y; s->mb_y++) {
          s->mb_x = 0;
          init_block_index(v);
-+        /* direct mode reads the co-located motion vectors of the next picture,
-+         * and in a field picture the field flags of the last reference field
-+         * picture, which need not be the next picture */
++        /* Direct mode reads the co-located motion vectors of the next picture,
++         * and in a field picture its field flags: field direct mode needs the
++         * next picture to be a field picture, so it wrote mv_f_next. */
 +        if (s->next_pic.ptr)
 +            ff_vc1_await_ref(v, &s->next_pic, s->mb_y * 16 + 15);
-+        if (v->field_mode && v->mv_f_next_pic)
-+            ff_thread_progress_await(&v->mv_f_next_pic->progress, 2 * s->mb_y + 1);
          for (; s->mb_x < s->mb_width; s->mb_x++) {
              update_block_index(s);
  
-@@ -2927,10 +2937,12 @@ static void vc1_decode_skip_blocks(VC1Context *v)
+@@ -2927,10 +2935,12 @@ static void vc1_decode_skip_blocks(VC1Context *v)
          s->mb_x = 0;
          init_block_index(v);
          update_block_index(s);
@@ -304,7 +301,7 @@ index db19d95..dda25c0 100644
      srcU += uvsrc_y * s->uvlinesize + uvsrc_x;
      srcV += uvsrc_y * s->uvlinesize + uvsrc_x;
 diff --git a/libavcodec/vc1dec.c b/libavcodec/vc1dec.c
-index 12b1e09..82dc9ee 100644
+index 12b1e09..882f376 100644
 --- a/libavcodec/vc1dec.c
 +++ b/libavcodec/vc1dec.c
 @@ -42,6 +42,7 @@
@@ -383,43 +380,33 @@ index 12b1e09..82dc9ee 100644
  av_cold void ff_vc1_init_transposed_scantables(VC1Context *v)
  {
      int i;
-@@ -629,6 +647,13 @@ static av_cold int vc1_decode_init(AVCodecContext *avctx)
-         return AVERROR_INVALIDDATA;
-     v->s.avctx = avctx;
- 
+@@ -768,7 +786,12 @@ static av_cold int vc1_decode_init(AVCodecContext *avctx)
+             return AVERROR_PATCHWELCOME;
+         }
+     }
+-    return 0;
++
 +    /* The picture pool is shared by all frame threads and is only handed to
 +     * a thread copy while the codec opens, so create it here rather than
-+     * with the rest of the context on the first picture. */
-+    ret = ff_mpv_decode_init(s, avctx);
-+    if (ret < 0)
-+        return ret;
-+
-     ff_vc1_init_common(v);
++     * with the rest of the context on the first picture. It comes last, as
++     * nothing frees it when the open fails. */
++    return ff_mpv_decode_init(s, avctx);
+ }
  
-     if (avctx->codec_id == AV_CODEC_ID_WMV3 || avctx->codec_id == AV_CODEC_ID_WMV3IMAGE) {
-@@ -792,6 +817,9 @@ static av_cold void vc1_decode_reset(AVCodecContext *avctx)
+ static av_cold void vc1_decode_reset(AVCodecContext *avctx)
+@@ -792,6 +815,8 @@ static av_cold void vc1_decode_reset(AVCodecContext *avctx)
      av_freep(&v->blk_mv_type_base);
      av_freep(&v->mv_f_base);
      av_freep(&v->mv_f_next_base);
 +    av_refstruct_unref(&v->mv_f_next_ref);
-+    av_refstruct_unref(&v->mv_f_next_pic);
 +    av_refstruct_pool_uninit(&v->mv_f_pool);
      av_freep(&v->block);
      av_freep(&v->cbp_base);
      av_freep(&v->ttblk_base);
-@@ -809,6 +837,98 @@ av_cold int ff_vc1_decode_end(AVCodecContext *avctx)
+@@ -809,6 +834,92 @@ av_cold int ff_vc1_decode_end(AVCodecContext *avctx)
      return ff_mpv_decode_close(avctx);
  }
  
-+static av_cold void vc1_decode_flush(AVCodecContext *avctx)
-+{
-+    VC1Context *const v = avctx->priv_data;
-+
-+    ff_mpeg_flush(avctx);
-+    /* The picture is done by now; its field flags stay as they are. */
-+    av_refstruct_unref(&v->mv_f_next_pic);
-+}
-+
 +#if HAVE_THREADS
 +static int vc1_update_thread_context(AVCodecContext *dst,
 +                                     const AVCodecContext *src)
@@ -454,8 +441,12 @@ index 12b1e09..82dc9ee 100644
 +    v->range_mapy            = v1->range_mapy;
 +    v->range_mapuv           = v1->range_mapuv;
 +
-+    if (!s1->context_initialized)
++    /* the source dropped its context, with its reference pictures */
++    if (!s1->context_initialized) {
++        if (s->context_initialized)
++            vc1_decode_reset(dst);
 +        return 0;
++    }
 +
 +    if (s->context_initialized &&
 +        (s->width != s1->width || s->height != s1->height))
@@ -495,7 +486,6 @@ index 12b1e09..82dc9ee 100644
 +
 +    /* field flags of the last reference field picture (B field direct mode) */
 +    av_refstruct_replace(&v->mv_f_next_ref, v1->mv_f_next_ref);
-+    av_refstruct_replace(&v->mv_f_next_pic, v1->mv_f_next_pic);
 +    v->mv_f_next[0] = (v->mv_f_next_ref ? v->mv_f_next_ref : v->mv_f_next_base) +
 +                      s->b8_stride + 1;
 +
@@ -506,7 +496,7 @@ index 12b1e09..82dc9ee 100644
  /** Decode a VC1/WMV3 frame
   * @todo TODO: Handle VC-1 IDUs (Transport level?)
   */
-@@ -830,6 +950,7 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+@@ -830,6 +941,7 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
          int raw_size;
      } *slices = NULL, *tmp;
      unsigned slices_allocated = 0;
@@ -514,23 +504,21 @@ index 12b1e09..82dc9ee 100644
  
      v->second_field = 0;
  
-@@ -1072,6 +1193,7 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+@@ -1069,6 +1181,7 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+         goto end;
+     }
+ 
++    frame_started = 1;
      if ((ret = ff_mpv_frame_start(s, avctx)) < 0) {
          goto err;
      }
-+    frame_started = 1;
- 
-     v->s.cur_pic.ptr->field_picture = v->field_mode;
-     v->s.cur_pic.ptr->f->flags |= AV_FRAME_FLAG_INTERLACED * (v->fcm != PROGRESSIVE);
-@@ -1090,6 +1212,40 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+@@ -1090,6 +1203,36 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
          s->cur_pic.ptr->f->repeat_pict = v->rptfrm * 2;
      }
  
 +    /* A reference field picture writes its field flags into a buffer of its
 +     * own, which B field pictures read as mv_f_next until the next one; any
-+     * other picture writes them into scratch space. A frame thread reading
-+     * them waits for the picture that writes them, so only frame threading
-+     * keeps a reference to that picture. */
++     * other picture writes them into scratch space. */
 +    if (v->field_mode && s->pict_type != AV_PICTURE_TYPE_B && !avctx->hwaccel) {
 +        uint8_t *mv_f = av_refstruct_pool_get(v->mv_f_pool);
 +        if (!mv_f) {
@@ -541,8 +529,6 @@ index 12b1e09..82dc9ee 100644
 +        v->mv_f_next_ref = mv_f;
 +        v->mv_f[0]       = mv_f + s->b8_stride + 1;
 +        v->mv_f_next[0]  = v->mv_f[0];
-+        if (avctx->active_thread_type & FF_THREAD_FRAME)
-+            av_refstruct_replace(&v->mv_f_next_pic, s->cur_pic.ptr);
 +    } else {
 +        v->mv_f[0] = v->mv_f_base + s->b8_stride + 1;
 +    }
@@ -563,7 +549,7 @@ index 12b1e09..82dc9ee 100644
      if (avctx->hwaccel) {
          const FFHWAccel *hwaccel = ffhwaccel(avctx->hwaccel);
          s->mb_y = 0;
-@@ -1281,6 +1437,10 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+@@ -1281,6 +1424,10 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
                              goto err;
                          continue;
                      }
@@ -574,7 +560,7 @@ index 12b1e09..82dc9ee 100644
                  } else if (get_bits1(&v->gb)) {
                      v->pic_header_flag = 1;
                      if ((header_ret = ff_vc1_parse_frame_header_adv(v, &v->gb)) < 0) {
-@@ -1326,10 +1486,8 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
+@@ -1326,10 +1473,8 @@ static int vc1_decode_frame(AVCodecContext *avctx, AVFrame *pict,
              s->cur_pic.linesize[2] >>= 1;
              s->linesize                      >>= 1;
              s->uvlinesize                    >>= 1;
@@ -586,39 +572,37 @@ index 12b1e09..82dc9ee 100644
          }
          ff_dlog(s->avctx, "Consumed %i/%i bits\n",
                  get_bits_count(&v->gb), v->gb.size_in_bits);
-@@ -1382,6 +1540,11 @@ image:
+@@ -1382,6 +1527,11 @@ image:
  end:
      ret = buf_size;
  err:
-+    /* A reference picture that fails after it started is never finished by
-+     * ff_mpv_frame_end(), so a frame thread waiting for its rows would wait
-+     * forever. Let it read what is there. */
-+    if (ret < 0 && frame_started && s->cur_pic.reference)
++    /* A reference picture that fails after it started, in ff_mpv_frame_start()
++     * or later, is never finished by ff_mpv_frame_end(), so a frame thread
++     * waiting for its rows would wait forever. Let it read what is there. */
++    if (ret < 0 && frame_started && s->cur_pic.ptr && s->cur_pic.reference)
 +        ff_thread_progress_report(&s->cur_pic.ptr->progress, INT_MAX);
      av_free(buf2);
      for (i = 0; i < n_slices; i++)
          av_free(slices[i].buf);
-@@ -1399,8 +1562,10 @@ const FFCodec ff_vc1_decoder = {
+@@ -1399,8 +1549,10 @@ const FFCodec ff_vc1_decoder = {
      .init           = vc1_decode_init,
      .close          = ff_vc1_decode_end,
      FF_CODEC_DECODE_CB(vc1_decode_frame),
--    .flush          = ff_mpeg_flush,
--    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
 +    UPDATE_THREAD_CONTEXT(vc1_update_thread_context),
-+    .flush          = vc1_decode_flush,
+     .flush          = ff_mpeg_flush,
+-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
 +    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
 +                      AV_CODEC_CAP_FRAME_THREADS,
      .hw_configs     = (const AVCodecHWConfigInternal *const []) {
  #if CONFIG_VC1_DXVA2_HWACCEL
                          HWACCEL_DXVA2(vc1),
-@@ -1438,8 +1603,10 @@ const FFCodec ff_wmv3_decoder = {
+@@ -1438,8 +1590,10 @@ const FFCodec ff_wmv3_decoder = {
      .init           = vc1_decode_init,
      .close          = ff_vc1_decode_end,
      FF_CODEC_DECODE_CB(vc1_decode_frame),
--    .flush          = ff_mpeg_flush,
--    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
 +    UPDATE_THREAD_CONTEXT(vc1_update_thread_context),
-+    .flush          = vc1_decode_flush,
+     .flush          = ff_mpeg_flush,
+-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
 +    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
 +                      AV_CODEC_CAP_FRAME_THREADS,
      .hw_configs     = (const AVCodecHWConfigInternal *const []) {

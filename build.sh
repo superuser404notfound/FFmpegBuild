@@ -1685,7 +1685,7 @@ patch_ffmpeg_vc1_frame_threads() {
     # AetherEngine #1107. Upstream decodes VC-1 and WMV3 on one thread whatever the caller asks
     # for, because neither decoder declares a threading capability, so the engine's software path
     # asked for frame threads and got one thread. The patch makes vc1 and wmv3 frame-threaded on
-    # the pattern of the MPEG-4 Part 2 decoder: update_thread_context copies what one picture hands
+    # the pattern of the MPEG-4 Part 2 decoder. update_thread_context copies what one picture hands
     # the next, a reference picture reports its finished macroblock rows, and every read of a
     # reference picture waits for the rows it touches. Output equals single-threaded decoding
     # (FATE vc1 / wmv3-drm / mss2 at 1 to 16 threads, frame hashes across seeks).
