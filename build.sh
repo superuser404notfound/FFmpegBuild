@@ -1681,6 +1681,25 @@ patch_ffmpeg_bwdif_videotoolbox() {
     }
 }
 
+patch_ffmpeg_vc1_frame_threads() {
+    # AetherEngine #1107. Upstream decodes VC-1 and WMV3 on one thread whatever the caller asks
+    # for, because neither decoder declares a threading capability, so the engine's software path
+    # asked for frame threads and got one thread. The patch makes vc1 and wmv3 frame-threaded on
+    # the pattern of the MPEG-4 Part 2 decoder: update_thread_context copies what one picture hands
+    # the next, a reference picture reports its finished macroblock rows, and every read of a
+    # reference picture waits for the rows it touches. Output equals single-threaded decoding
+    # (FATE vc1 / wmv3-drm / mss2 at 1 to 16 threads, frame hashes across seeks).
+    local P="${SCRIPT_DIR}/patches/vc1-frame-threads.patch"
+    if grep -q "vc1_update_thread_context" "${FFMPEG_SRC}/libavcodec/vc1dec.c"; then
+        return
+    fi
+    echo "→ Patching FFmpeg: vc1 / wmv3 frame threading (AetherEngine #1107)"
+    git -C "${FFMPEG_SRC}" apply "${P}" || {
+        echo "ERROR: vc1 frame threading patch did not apply (upstream source changed?)"
+        exit 1
+    }
+}
+
 echo "╔══════════════════════════════════════╗"
 echo "║  FFmpegBuild: FFmpeg + dav1d (AV1)  ║"
 echo "║  VideoToolbox HW + Metal ready      ║"
@@ -1704,6 +1723,7 @@ patch_ffmpeg_matroska_byte_seek_done
 patch_ffmpeg_mpegts_dovi_descriptor
 patch_ffmpeg_mov_lazy_frag_index
 patch_ffmpeg_bwdif_videotoolbox
+patch_ffmpeg_vc1_frame_threads
 fetch_dav1d
 fetch_zimg
 fetch_zvbi
