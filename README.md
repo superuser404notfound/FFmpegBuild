@@ -10,7 +10,7 @@
   <a href="https://swiftpackageindex.com/superuser404notfound/FFmpegBuild"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fsuperuser404notfound%2FFFmpegBuild%2Fbadge%3Ftype%3Dswift-versions"></a>
   <a href="https://swiftpackageindex.com/superuser404notfound/FFmpegBuild"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fsuperuser404notfound%2FFFmpegBuild%2Fbadge%3Ftype%3Dplatforms"></a>
   <img src="https://img.shields.io/badge/FFmpeg-8.1-brightgreen">
-  <img src="https://img.shields.io/badge/dav1d-1.5.4-blue">
+  <img src="https://img.shields.io/badge/dav1d-1.5.5-blue">
   <img src="https://img.shields.io/badge/license-LGPL--2.1-lightgrey">
   <a href="https://ko-fi.com/superuser404"><img src="https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=kofi&logoColor=white"></a>
 </p>
