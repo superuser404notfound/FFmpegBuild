@@ -1,10 +1,16 @@
 avfilter/vf_yadif_videotoolbox: one command buffer per frame
 
 This is FFmpeg PR 26244 as reviewed upstream (head 73b7b4496b), ported to
-n8.1.3. The only port change: n8.1.3's YADIFContext.filter returns void,
-where master returns the error since 2b99c068db, so filter() wraps the
-upstream body (filter_planes) and still resets YADIF_FIELD_END after a
-failure.
+n8.1.3, plus one fix that upstream gets with the planned factoring of
+both VideoToolbox deinterlacers. n8.1.3's YADIFContext.filter returns
+void, where master returns the error since 2b99c068db, so filter() wraps
+the upstream body (filter_planes). A failed frame still goes out, so the
+wrapper gives it the attachments and field state a successful one gets.
+
+The added fix: the output pool takes the input frames context's range,
+or the negotiated one when that is unspecified, as bwdif_videotoolbox
+does. Behind hwupload the range is unspecified, so full-range NV12 came
+out in a video-range (420v) buffer.
 
 The filter committed a command buffer and waited for it once per plane,
 so an NV12 or P010 frame went to the GPU twice and the calling thread
@@ -54,7 +60,7 @@ index 8a3d41a30f..c0eec142fe 100644
  
  /*
 diff --git a/libavfilter/vf_yadif_videotoolbox.m b/libavfilter/vf_yadif_videotoolbox.m
-index f8eb0c6bfa..1bcfcc4e1d 100644
+index f8eb0c6bfa..5e9f2444a4 100644
 --- a/libavfilter/vf_yadif_videotoolbox.m
 +++ b/libavfilter/vf_yadif_videotoolbox.m
 @@ -29,10 +29,10 @@
@@ -71,7 +77,7 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
      YADIFContext yadif;
  
      AVBufferRef       *device_ref;
-@@ -44,133 +44,177 @@ typedef struct API_AVAILABLE(macos(10.11), ios(8.0)) YADIFVTContext {
+@@ -44,133 +44,186 @@ typedef struct API_AVAILABLE(macos(10.11), ios(8.0)) YADIFVTContext {
      id<MTLCommandQueue> mtlQueue;
      id<MTLComputePipelineState> mtlPipeline;
      id<MTLFunction> mtlFunction;
@@ -260,12 +266,12 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
 -        cur  = ff_metal_texture_from_pixbuf(ctx, s->textureCache, (CVPixelBufferRef)y->cur->data[3], i, format);
 -        next = ff_metal_texture_from_pixbuf(ctx, s->textureCache, (CVPixelBufferRef)y->next->data[3], i, format);
 -        dest = ff_metal_texture_from_pixbuf(ctx, s->textureCache, (CVPixelBufferRef)dst->data[3], i, format);
- 
+-
 -        tex_prev = CVMetalTextureGetTexture(prev);
 -        tex_cur  = CVMetalTextureGetTexture(cur);
 -        tex_next = CVMetalTextureGetTexture(next);
 -        tex_dest = CVMetalTextureGetTexture(dest);
--
+ 
 -        call_kernel(ctx, tex_dest, tex_prev, tex_cur, tex_next,
 -                         channels, parity, tff);
 +        [encoder endEncoding];
@@ -308,28 +314,37 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
 -exit:
 -    return;
 +    return 0;
-+}
-+
+ }
+ 
+-static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios(8.0))
 +// n8.1.3's YADIFContext.filter returns void (master propagates the error since
-+// 2b99c068db), so a failure ends here; filter_planes() has logged it. The field
-+// state still has to move on, as it does on success.
++// 2b99c068db), so a failed frame still goes out; filter_planes() has logged it.
++// It gets the attachments and field state a successful frame would have.
 +static void filter(AVFilterContext *ctx, AVFrame *dst,
 +                   int parity, int tff) API_AVAILABLE(macos(10.11), ios(8.3))
 +{
 +    YADIFVTContext *s = ctx->priv;
 +    YADIFContext *y = &s->yadif;
 +
-+    if (filter_planes(ctx, dst, parity, tff) < 0 &&
-+        y->current_field == YADIF_FIELD_END)
++    CVPixelBufferRef dst_buf = (CVPixelBufferRef)dst->data[3];
++
++    if (filter_planes(ctx, dst, parity, tff) >= 0)
++        return;
++
++    CVBufferRemoveAllAttachments(dst_buf);
++    CVBufferPropagateAttachments((CVPixelBufferRef)y->cur->data[3], dst_buf);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferFieldCountKey);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferFieldDetailKey);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferChromaLocationBottomFieldKey);
++    if (y->current_field == YADIF_FIELD_END)
 +        y->current_field = YADIF_FIELD_NORMAL;
- }
- 
--static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios(8.0))
++}
++
 +static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios(8.3))
  {
      YADIFVTContext *s = ctx->priv;
  
-@@ -180,7 +224,6 @@ static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11),
+@@ -180,7 +233,6 @@ static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11),
      av_buffer_unref(&s->input_frames_ref);
      s->input_frames = NULL;
  
@@ -337,7 +352,7 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
      ff_objc_release(&s->mtlFunction);
      ff_objc_release(&s->mtlPipeline);
      ff_objc_release(&s->mtlQueue);
-@@ -196,12 +239,12 @@ static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11),
+@@ -196,12 +248,12 @@ static av_cold void do_uninit(AVFilterContext *ctx) API_AVAILABLE(macos(10.11),
  
  static av_cold void yadif_videotoolbox_uninit(AVFilterContext *ctx)
  {
@@ -352,7 +367,7 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
  {
      YADIFVTContext *s = ctx->priv;
      NSError *err = nil;
-@@ -248,14 +291,6 @@ static av_cold int do_init(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios
+@@ -248,14 +300,6 @@ static av_cold int do_init(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios
          goto fail;
      }
  
@@ -367,7 +382,7 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
      ret = CVMetalTextureCacheCreate(
          NULL,
          NULL,
-@@ -276,17 +311,17 @@ static av_cold int do_init(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios
+@@ -276,17 +320,17 @@ static av_cold int do_init(AVFilterContext *ctx) API_AVAILABLE(macos(10.11), ios
  
  static av_cold int yadif_videotoolbox_init(AVFilterContext *ctx)
  {
@@ -388,7 +403,7 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
  {
      FilterLink *l = ff_filter_link(inlink);
      AVFilterContext *ctx = inlink->dst;
-@@ -312,15 +347,15 @@ static int do_config_input(AVFilterLink *inlink) API_AVAILABLE(macos(10.11), ios
+@@ -312,19 +356,21 @@ static int do_config_input(AVFilterLink *inlink) API_AVAILABLE(macos(10.11), ios
  static int config_input(AVFilterLink *inlink)
  {
      AVFilterContext *ctx = inlink->dst;
@@ -407,7 +422,28 @@ index f8eb0c6bfa..1bcfcc4e1d 100644
  {
      FilterLink *l = ff_filter_link(link);
      FilterLink *il = ff_filter_link(link->src->inputs[0]);
-@@ -380,10 +415,10 @@ static int do_config_output(AVFilterLink *link) API_AVAILABLE(macos(10.11), ios(
+     AVHWFramesContext *output_frames, *input_frames;
++    AVVTFramesContext *out_vt;
++    const AVVTFramesContext *in_vt;
+     AVFilterContext *ctx = link->src;
+     YADIFVTContext *s = ctx->priv;
+     YADIFContext *y = &s->yadif;
+@@ -353,7 +399,13 @@ static int do_config_output(AVFilterLink *link) API_AVAILABLE(macos(10.11), ios(
+     output_frames->sw_format = s->input_frames->sw_format;
+     output_frames->width     = ctx->inputs[0]->w;
+     output_frames->height    = ctx->inputs[0]->h;
+-    ((AVVTFramesContext *)output_frames->hwctx)->color_range = ((AVVTFramesContext *)input_frames->hwctx)->color_range;
++    out_vt = output_frames->hwctx;
++    in_vt  = input_frames->hwctx;
++    // The range picks the pool's pixel format (420v or 420f), so fall back
++    // to the negotiated one when the input frames context leaves it open.
++    out_vt->color_range = in_vt->color_range;
++    if (out_vt->color_range == AVCOL_RANGE_UNSPECIFIED)
++        out_vt->color_range = ctx->inputs[0]->color_range;
+ 
+     ret = ff_filter_init_hw_frames(ctx, link, 10);
+     if (ret < 0)
+@@ -380,10 +432,10 @@ static int do_config_output(AVFilterLink *link) API_AVAILABLE(macos(10.11), ios(
  static int config_output(AVFilterLink *link)
  {
      AVFilterContext *ctx = link->src;

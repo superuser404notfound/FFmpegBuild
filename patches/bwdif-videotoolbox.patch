@@ -3,8 +3,9 @@ avfilter: add bwdif_videotoolbox, bwdif as a Metal compute kernel
 This is FFmpeg PR 26276 as reviewed upstream (head 6efb91b844), ported to
 n8.1.3, without its docs and FATE tests. The only port change: n8.1.3's
 YADIFContext.filter returns void, where master returns the error since
-2b99c068db, so filter() wraps the upstream body (filter_planes) and still
-resets YADIF_FIELD_END after a failure.
+2b99c068db, so filter() wraps the upstream body (filter_planes). A failed
+frame still goes out, so the wrapper gives it the attachments and field
+state a successful one gets.
 
 Upstream has bwdif for CUDA and Vulkan, not for Metal, so on Apple
 platforms a GPU deinterlace runs yadif while a CPU one runs bwdif, and
@@ -278,10 +279,10 @@ index 0000000000..74ffa43a98
 +}
 diff --git a/libavfilter/vf_bwdif_videotoolbox.m b/libavfilter/vf_bwdif_videotoolbox.m
 new file mode 100644
-index 0000000000..71c0d26547
+index 0000000000..1a5110f32f
 --- /dev/null
 +++ b/libavfilter/vf_bwdif_videotoolbox.m
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,522 @@
 +/*
 + * Copyright (C) 2018 Philip Langdale <philipl@overt.org>
 + *               2020 Aman Karmani <aman@tmm1.net>
@@ -474,16 +475,25 @@ index 0000000000..71c0d26547
 +}
 +
 +// n8.1.3's YADIFContext.filter returns void (master propagates the error since
-+// 2b99c068db), so a failure ends here; filter_planes() has logged it. The field
-+// state still has to move on, as it does on success.
++// 2b99c068db), so a failed frame still goes out; filter_planes() has logged it.
++// It gets the attachments and field state a successful frame would have.
 +static void filter(AVFilterContext *ctx, AVFrame *dst,
 +                   int parity, int tff) API_AVAILABLE(macos(10.11), ios(8.3))
 +{
 +    BWDIFVTContext *s = ctx->priv;
 +    YADIFContext *y = &s->yadif;
 +
-+    if (filter_planes(ctx, dst, parity, tff) < 0 &&
-+        y->current_field == YADIF_FIELD_END)
++    CVPixelBufferRef dst_buf = (CVPixelBufferRef)dst->data[3];
++
++    if (filter_planes(ctx, dst, parity, tff) >= 0)
++        return;
++
++    CVBufferRemoveAllAttachments(dst_buf);
++    CVBufferPropagateAttachments((CVPixelBufferRef)y->cur->data[3], dst_buf);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferFieldCountKey);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferFieldDetailKey);
++    CVBufferRemoveAttachment(dst_buf, kCVImageBufferChromaLocationBottomFieldKey);
++    if (y->current_field == YADIF_FIELD_END)
 +        y->current_field = YADIF_FIELD_NORMAL;
 +}
 +
