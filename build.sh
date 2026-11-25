@@ -97,11 +97,16 @@ patch_ffmpeg_yadif_videotoolbox() {
     # the older autorelease fix: commandBuffer / computeCommandEncoder are +0 under FFmpeg's
     # non-ARC build and upstream released them by hand, which crashed host apps whose GCD
     # queues pop their pool at session teardown (EXC_BAD_ACCESS in
-    # AutoreleasePoolPage::releaseUntil). n8.1.3 has both; master has the pool since FFmpeg
-    # PR 23850 but still submits per plane.
+    # AutoreleasePoolPage::releaseUntil). Since 3.20.0 the patch is FFmpeg PR 26244 as
+    # reviewed upstream, ported to n8.1.3, which also clears a reused output buffer's
+    # attachments and drops the field attachments.
     local F="${FFMPEG_SRC}/libavfilter/vf_yadif_videotoolbox.m"
     local P="${SCRIPT_DIR}/patches/yadif-videotoolbox-one-submission.patch"
-    grep -q "encode_plane" "${F}" && return
+    grep -q "filter_planes" "${F}" && return
+    # A tree patched by 3.19.x or older carries the first version of this patch.
+    if grep -q "encode_plane" "${F}"; then
+        git -C "${FFMPEG_SRC}" checkout -- libavfilter/vf_yadif_videotoolbox.m libavfilter/metal/vf_yadif_videotoolbox.metal
+    fi
     # A tree patched by an older build carries the inline perl edit that came before this patch.
     if grep -q "See FFmpegBuild build.sh patch_ffmpeg\." "${F}"; then
         git -C "${FFMPEG_SRC}" checkout -- libavfilter/vf_yadif_videotoolbox.m
@@ -1672,10 +1677,16 @@ patch_ffmpeg_bwdif_videotoolbox() {
     # bwdif's options and a Metal kernel doing bwdifdsp.c's integer arithmetic on integer samples
     # held in floats (exact up to 10 bits; deeper formats are refused). Its output equals CPU bwdif
     # frame for frame (framemd5, NV12 and P010, both modes, both parities). It submits each
-    # frame once, like the yadif_videotoolbox patch.
+    # frame once, like the yadif_videotoolbox patch. Since 3.20.0 the patch is FFmpeg PR 26276
+    # as reviewed upstream, ported to n8.1.3 (without its docs and FATE tests).
     local P="${SCRIPT_DIR}/patches/bwdif-videotoolbox.patch"
-    if [[ -f "${FFMPEG_SRC}/libavfilter/vf_bwdif_videotoolbox.m" ]]; then
-        return
+    local F="${FFMPEG_SRC}/libavfilter/vf_bwdif_videotoolbox.m"
+    if [[ -f "${F}" ]]; then
+        grep -q "filter_planes" "${F}" && return
+        # The first version also changed configure, Makefile and allfilters.c, and the ivtc
+        # patch builds on those lines, so a partial revert is not safe here.
+        echo "ERROR: ${FFMPEG_SRC} carries an older bwdif_videotoolbox patch; delete it and rerun"
+        exit 1
     fi
     echo "→ Patching FFmpeg: bwdif_videotoolbox, bwdif as a Metal kernel (AetherEngine #1102)"
     git -C "${FFMPEG_SRC}" apply "${P}" || {
