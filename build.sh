@@ -1710,7 +1710,9 @@ patch_ffmpeg_vc1_frame_threads() {
     # the pattern of the MPEG-4 Part 2 decoder. update_thread_context copies what one picture hands
     # the next, a reference picture reports its finished macroblock rows, and every read of a
     # reference picture waits for the rows it touches. Output equals single-threaded decoding
-    # (FATE vc1 / wmv3-drm / mss2 at 1 to 16 threads, frame hashes across seeks).
+    # (FATE vc1 / wmv3-drm / mss2 at 1 to 16 threads, frame hashes across seeks). The patch is FFmpeg
+    # PR 26273 after its fifth review round, ported to n8.1.3 (without its LoongArch fix and FATE
+    # tests).
     local P="${SCRIPT_DIR}/patches/vc1-frame-threads.patch"
     if grep -q "vc1_update_thread_context" "${FFMPEG_SRC}/libavcodec/vc1dec.c"; then
         return
